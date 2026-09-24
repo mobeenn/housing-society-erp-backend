@@ -1,0 +1,12 @@
+const express = require("express");
+const { authenticate, authorize } = require("../../middlewares/auth");
+const validate = require("../../middlewares/validate");
+const { createExpenseSchema } = require("./validation");
+const controller = require("./controller");
+const router = express.Router(); router.use(authenticate);
+router.get("/", authorize("expenses", "view"), controller.getExpenses);
+router.post("/", authorize("expenses", "create"), validate(createExpenseSchema), controller.createExpense);
+router.post("/:id/approve", authorize("expenses", "approve"), controller.approveExpense);
+router.post("/:id/reject", authorize("expenses", "reject"), controller.rejectExpense);
+router.post("/:id/pay", authorize("expenses", "edit"), controller.payExpense);
+module.exports = router;

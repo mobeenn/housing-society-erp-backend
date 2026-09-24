@@ -1,0 +1,11 @@
+const ConstructionService = require("./service");
+const ApiResponse = require("../../utils/apiResponse");
+exports.list = async (req, res) => ApiResponse.success(res, 200, await ConstructionService.list(req.query));
+exports.get = async (req, res) => ApiResponse.success(res, 200, await ConstructionService.get(req.params.id));
+exports.create = async (req, res) => ApiResponse.success(res, 201, await ConstructionService.create(req.body, req), "Construction application created");
+exports.review = async (req, res) => ApiResponse.success(res, 200, await ConstructionService.review(req.params.id, req), "Construction application under review");
+exports.addInspection = async (req, res) => ApiResponse.success(res, 201, await ConstructionService.addInspection(req.params.id, req.body, req), "Site inspection logged");
+exports.updateInspection = async (req, res) => ApiResponse.success(res, 200, await ConstructionService.updateInspection(req.params.inspectionId, req.body, req), "Site inspection updated");
+exports.approve = async (req, res) => ApiResponse.success(res, 200, await ConstructionService.approve(req.params.id, req), "Construction approved and certified");
+exports.reject = async (req, res) => ApiResponse.success(res, 200, await ConstructionService.reject(req.params.id, req.body.remarks, req), "Construction rejected");
+exports.certificate = async (req, res) => { const { application, buffer } = await ConstructionService.certificate(req.params.id); res.type("application/pdf").setHeader("Content-Disposition", `attachment; filename="completion-${application.plotRef?.plotNumber || application.plot}.pdf"`).send(buffer); };

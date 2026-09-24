@@ -1,0 +1,15 @@
+const express = require("express");
+const { authenticate, authorize } = require("../../middlewares/auth");
+const validate = require("../../middlewares/validate");
+const { createTransferSchema } = require("./validation");
+const controller = require("./controller");
+const router = express.Router(); router.use(authenticate);
+router.get("/", authorize("transfers", "view"), controller.list);
+router.post("/", authorize("transfers", "create"), validate(createTransferSchema), controller.create);
+router.get("/:id", authorize("transfers", "view"), controller.get);
+router.post("/:id/verify", authorize("transfers", "approve"), controller.verify);
+router.post("/:id/approve", authorize("transfers", "approve"), controller.approve);
+router.post("/:id/reject", authorize("transfers", "reject"), controller.reject);
+router.post("/:id/complete", authorize("transfers", "approve"), controller.complete);
+router.get("/:id/certificate.pdf", authorize("transfers", "view"), controller.certificate);
+module.exports = router;

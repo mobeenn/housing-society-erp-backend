@@ -1,0 +1,18 @@
+const express = require("express");
+const { authenticate, authorize } = require("../../middlewares/auth");
+const validate = require("../../middlewares/validate");
+const { createNocSchema } = require("./validation");
+const controller = require("./controller");
+const router = express.Router();
+router.get("/verify/:token", controller.publicVerify);
+router.use(authenticate);
+router.get("/", authorize("nocs", "view"), controller.list);
+router.post("/", authorize("nocs", "create"), validate(createNocSchema), controller.create);
+router.get("/:id/certificate.pdf", authorize("nocs", "view"), controller.certificate);
+router.get("/:id", authorize("nocs", "view"), controller.get);
+router.post("/:id/verify", authorize("nocs", "approve"), controller.verify);
+router.post("/:id/clear-dues", authorize("nocs", "approve"), controller.clearDues);
+router.post("/:id/pay-fee", authorize("nocs", "edit"), controller.payFee);
+router.post("/:id/approve", authorize("nocs", "approve"), controller.approve);
+router.post("/:id/issue", authorize("nocs", "approve"), controller.issue);
+module.exports = router;

@@ -1,0 +1,16 @@
+const express = require("express");
+const { authenticate, authorize } = require("../../middlewares/auth");
+const validate = require("../../middlewares/validate");
+const { createApplicationSchema, inspectionSchema } = require("./validation");
+const controller = require("./controller");
+const router = express.Router(); router.use(authenticate);
+router.get("/", authorize("construction", "view"), controller.list);
+router.post("/", authorize("construction", "create"), validate(createApplicationSchema), controller.create);
+router.get("/:id/completion-certificate.pdf", authorize("construction", "view"), controller.certificate);
+router.get("/:id", authorize("construction", "view"), controller.get);
+router.post("/:id/review", authorize("construction", "edit"), controller.review);
+router.post("/:id/inspections", authorize("construction", "edit"), validate(inspectionSchema), controller.addInspection);
+router.patch("/:id/inspections/:inspectionId", authorize("construction", "edit"), controller.updateInspection);
+router.post("/:id/approve", authorize("construction", "approve"), controller.approve);
+router.post("/:id/reject", authorize("construction", "reject"), controller.reject);
+module.exports = router;

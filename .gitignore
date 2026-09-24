@@ -1,0 +1,20 @@
+node_modules/
+.env
+.env.*
+!.env.example
+*.log
+dist/
+coverage/
+
+# Local runtime data and generated documents
+data/
+uploads/
+
+# Local acceptance artifacts
+AUTH_TESTING_RESULTS.md
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

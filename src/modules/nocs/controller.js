@@ -1,0 +1,12 @@
+const NocService = require("./service");
+const ApiResponse = require("../../utils/apiResponse");
+exports.list = async (req, res) => ApiResponse.success(res, 200, await NocService.list(req.query));
+exports.get = async (req, res) => ApiResponse.success(res, 200, await NocService.get(req.params.id));
+exports.create = async (req, res) => ApiResponse.success(res, 201, await NocService.create(req.body, req), "NOC application created");
+exports.verify = async (req, res) => ApiResponse.success(res, 200, await NocService.verify(req.params.id, req), "NOC verified");
+exports.clearDues = async (req, res) => ApiResponse.success(res, 200, await NocService.clearDues(req.params.id, req), "NOC dues cleared");
+exports.payFee = async (req, res) => ApiResponse.success(res, 200, await NocService.payFee(req.params.id, req), "NOC fee paid");
+exports.approve = async (req, res) => ApiResponse.success(res, 200, await NocService.approve(req.params.id, req), "NOC approved");
+exports.issue = async (req, res) => ApiResponse.success(res, 200, await NocService.issue(req.params.id, req), "NOC issued");
+exports.certificate = async (req, res) => { const { noc, buffer } = await NocService.certificate(req.params.id); res.type("application/pdf").setHeader("Content-Disposition", `attachment; filename="noc-${noc.issuedNocNumber}.pdf"`).send(buffer); };
+exports.publicVerify = async (req, res) => ApiResponse.success(res, 200, await NocService.publicVerify(req.params.token));

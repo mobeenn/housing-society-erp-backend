@@ -1,0 +1,10 @@
+const PossessionService = require("./service");
+const ApiResponse = require("../../utils/apiResponse");
+exports.list = async (req, res) => ApiResponse.success(res, 200, await PossessionService.list(req.query));
+exports.get = async (req, res) => ApiResponse.success(res, 200, await PossessionService.get(req.params.id));
+exports.create = async (req, res) => ApiResponse.success(res, 201, await PossessionService.create(req.body, req), "Possession application created");
+exports.verify = async (req, res) => ApiResponse.success(res, 200, await PossessionService.verify(req.params.id, req), "Possession verified");
+exports.payCharges = async (req, res) => ApiResponse.success(res, 200, await PossessionService.payCharges(req.params.id, req), "Possession charges paid");
+exports.approve = async (req, res) => ApiResponse.success(res, 200, await PossessionService.approve(req.params.id, req), "Possession approved");
+exports.issue = async (req, res) => ApiResponse.success(res, 200, await PossessionService.issue(req.params.id, req), "Possession issued");
+exports.letter = async (req, res) => { const { app, buffer } = await PossessionService.letter(req.params.id); res.type("application/pdf").setHeader("Content-Disposition", `attachment; filename="possession-${app.plotRef?.plotNumber || app.plot}.pdf"`).send(buffer); };

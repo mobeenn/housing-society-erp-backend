@@ -1,0 +1,10 @@
+const TransferService = require("./service");
+const ApiResponse = require("../../utils/apiResponse");
+exports.list = async (req, res) => ApiResponse.success(res, 200, await TransferService.list(req.query));
+exports.get = async (req, res) => ApiResponse.success(res, 200, await TransferService.getById(req.params.id));
+exports.create = async (req, res) => ApiResponse.success(res, 201, await TransferService.create(req.body, req), "Transfer request created");
+exports.verify = async (req, res) => ApiResponse.success(res, 200, await TransferService.verify(req.params.id, req), "Transfer verified and submitted for approval");
+exports.approve = async (req, res) => ApiResponse.success(res, 200, await TransferService.approve(req.params.id, req), "Transfer approved");
+exports.reject = async (req, res) => ApiResponse.success(res, 200, await TransferService.reject(req.params.id, req.body.remarks, req), "Transfer rejected");
+exports.complete = async (req, res) => ApiResponse.success(res, 200, await TransferService.complete(req.params.id, req), "Transfer completed");
+exports.certificate = async (req, res) => { const { transfer, buffer } = await TransferService.certificate(req.params.id); res.type("application/pdf").setHeader("Content-Disposition", `attachment; filename="transfer-${transfer._id}.pdf"`).send(buffer); };

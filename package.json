@@ -1,0 +1,65 @@
+{
+  "name": "housing-society-erp-backend",
+  "version": "1.0.0",
+  "description": "Housing Society Management ERP — REST API backend",
+  "main": "src/server.js",
+  "scripts": {
+    "dev": "nodemon src/server.js",
+    "start": "node src/server.js",
+    "test": "node --test --test-concurrency=1 test/installmentCalculator.test.js test/paymentAllocation.test.js test/constructionFlow.test.js test/complaintFlow.test.js test/maintenanceFlow.test.js test/visitorAndPassFlow.test.js test/securityAndVehiclesFlow.test.js test/hrAndStaffFlow.test.js test/recoveryCalculator.test.js test/payrollCalculator.test.js test/phase15.test.js",
+    "test:rbac:e2e": "node test-rbac-e2e.js",
+    "invoices:backfill": "node src/seeds/backfillInvoices.js",
+    "seed": "npm run seed:roles && npm run seed:administration && npm run seed:numbering && npm run rbac:seed && npm run recovery:seed && npm run hr-payroll:seed && npm run phase15:seed",
+    "recovery:seed": "node src/seeds/seedRecoveryAccess.js",
+    "hr-payroll:seed": "node src/seeds/seedHrPayrollAccess.js",
+    "phase15:seed": "node src/seeds/seedPhase15Access.js",
+    "seed:demo": "node src/seeds/seedDevelopmentData.js",
+    "seed:phase8": "node src/seeds/seedPhase8.js",
+    "rbac:seed": "node src/seeds/seedRbacModules.js",
+    "rbac:migrate": "node src/seeds/seedRbacModules.js",
+    "rbac:migrate:force": "node src/seeds/seedRbacModules.js --force",
+    "seed:development": "npm run seed && npm run seed:demo && npm run seed:phase8 && npm run rbac:seed && npm run invoices:backfill",
+    "seed:roles": "node src/seeds/seedRolesAndSuperAdmin.js",
+    "seed:administration": "node src/seeds/seedAdministration.js",
+    "seed:numbering": "node src/seeds/seedNumberingRules.js",
+    "lint": "eslint src/",
+    "format": "prettier --write src/"
+  },
+  "keywords": [
+    "housing-society",
+    "erp",
+    "express",
+    "file-database",
+    "postgresql-migration"
+  ],
+  "license": "PRIVATE",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.2",
+    "exceljs": "^4.4.0",
+    "express": "^4.22.3",
+    "express-async-errors": "^3.1.1",
+    "express-rate-limit": "^8.7.0",
+    "helmet": "^8.3.0",
+    "jsonwebtoken": "^9.0.3",
+    "morgan": "^1.12.1",
+    "multer": "^2.4.0",
+    "pdfkit": "^0.20.2",
+    "qrcode": "^1.5.4",
+    "uuid": "^11.1.1",
+    "zod": "^4.6.5"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
+  },
+  "devDependencies": {
+    "eslint": "^10.11.0",
+    "nodemon": "^3.1.14",
+    "prettier": "^3.9.8"
+  }
+}
