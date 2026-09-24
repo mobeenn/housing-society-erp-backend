@@ -90,3 +90,30 @@ All endpoints follow a consistent envelope:
 // Error
 { "success": false, "message": "…", "errors": [] }
 ```
+
+## Vercel Demo Deployment
+
+The live frontend is hosted at:
+
+- `https://housing-society-erp-frontend.vercel.app`
+
+The backend accepts that origin by default and supports Vercel preview origins.
+For a production Vercel configuration, set these environment variables:
+
+```bash
+NODE_ENV=production
+CORS_ORIGIN=https://housing-society-erp-frontend.vercel.app
+COOKIE_SECURE=true
+COOKIE_SAME_SITE=none
+JWT_ACCESS_SECRET=<long-random-secret>
+JWT_REFRESH_SECRET=<different-long-random-secret>
+```
+
+`vercel.json` routes the Express application through `api/index.js`. On Vercel,
+the file database is initialized under the operating system's temporary directory
+and the base roles, administrator, settings, and RBAC records are bootstrapped
+automatically.
+
+> **Demo warning:** Vercel temporary storage is ephemeral. Data resets when a
+> serverless function is recycled or redeployed. Use persistent storage (for
+> example private Vercel Blob or a backend host with a disk) before production use.

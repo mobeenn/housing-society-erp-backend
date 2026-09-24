@@ -1,5 +1,17 @@
 const AuthService = require("./service");
 const ApiResponse = require("../../utils/apiResponse");
+const env = require("../../config/env");
+
+const refreshCookieBaseOptions = {
+  httpOnly: true,
+  secure: env.COOKIE_SECURE,
+  sameSite: env.COOKIE_SAME_SITE,
+  path: "/",
+};
+const refreshCookieOptions = {
+  ...refreshCookieBaseOptions,
+  maxAge: 7 * 24 * 60 * 60 * 1000,
+};
 
 class AuthController {
   static async login(req, res) {
@@ -10,12 +22,7 @@ class AuthController {
     const result = await AuthService.login(email, password, ipAddress, userAgent);
 
     // Set refresh token as httpOnly cookie
-    res.cookie("refreshToken", result.refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
-      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-    });
+    res.cookie("refreshToken", result.refreshToken, refreshCookieOptions);
 
     return ApiResponse.success(res, 200, "Login successful", {
       user: result.user,
@@ -28,12 +35,7 @@ class AuthController {
     const tokens = await AuthService.refresh(token);
 
     // Set updated refresh token cookie
-    res.cookie("refreshToken", tokens.refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
+    res.cookie("refreshToken", tokens.refreshToken, refreshCookieOptions);
 
     return ApiResponse.success(res, 200, "Token refreshed", {
       accessToken: tokens.accessToken,
@@ -49,7 +51,7 @@ class AuthController {
       await AuthService.logout(req.user.id, ipAddress, userAgent);
     }
 
-    res.clearCookie("refreshToken");
+    res.clearCookie("refreshToken", refreshCookieBaseOptions);
     return ApiResponse.success(res, 200, "Logged out successfully");
   }
 

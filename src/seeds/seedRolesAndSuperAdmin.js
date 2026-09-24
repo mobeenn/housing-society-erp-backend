@@ -325,19 +325,25 @@ async function seed() {
         mustResetPassword: false,
       });
 
-      console.log(`\n   ✅ Created Super Admin user:`);
-      console.log(`      Email: ${superAdminEmail}`);
-      console.log(`      Password: ${superAdminPassword}`);
-      console.log(`      ⚠️  Change the password after first login!\n`);
+      console.log(`\n   ✅ Created Super Admin user: ${superAdminEmail}`);
+      if (!env.isProd) {
+        console.log(`      Password: ${superAdminPassword}`);
+        console.log("      ⚠️  Change the password after first login!\n");
+      }
     }
 
     console.log("🎉 Seed completed successfully.\n");
-    process.exit(0);
   } catch (error) {
     console.error("\n❌ Seed failed:", error.message);
-    console.error(error);
-    process.exit(1);
+    throw error;
   }
 }
 
-seed();
+if (require.main === module) {
+  seed().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { DEFAULT_ROLES, seed };

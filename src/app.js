@@ -13,6 +13,21 @@ const notFound = require("./middlewares/notFound");
 const errorHandler = require("./middlewares/errorHandler");
 
 const app = express();
+const configuredOrigins = new Set(
+  String(env.CORS_ORIGIN || "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean),
+);
+const productionFrontendOrigin = "https://housing-society-erp-frontend.vercel.app";
+if (env.isProd) configuredOrigins.add(productionFrontendOrigin);
+
+const isAllowedOrigin = (origin) => {
+  if (!origin) return true;
+  if (configuredOrigins.has(origin)) return true;
+  return env.isVercel
+    && /^https:\/\/housing-society-erp-frontend(?:-[a-z0-9-]+)?\.vercel\.app$/.test(origin);
+};
 
 // ── Security headers ────────────────────────────
 app.use(helmet());
@@ -20,7 +35,7 @@ app.use(helmet());
 // ── CORS ────────────────────────────────────────
 app.use(
   cors({
-    origin: env.CORS_ORIGIN,
+    origin: (origin, callback) => callback(null, isAllowedOrigin(origin)),
     credentials: true,
   })
 );
@@ -51,7 +66,10 @@ app.use("/api", apiLimiter);
 
 // Health check
 app.get("/api/health", (_req, res) => {
-  ApiResponse.success(res, 200, "OK");
+  ApiResponse.success(res, 200, "OK", {
+    storage: env.isVercel ? "ephemeral-demo" : "local-json-file",
+    persistence: env.isVercel ? "resets-on-cold-start-or-redeploy" : "persistent-local-file",
+  });
 });
 
 // ── Module routes ───────────────────────────────

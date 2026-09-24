@@ -10,16 +10,14 @@ const connectDB = async () => {
   try {
     await fileDB.init();
     console.log(`🗄️  Using file-based database (temporary)`);
-    console.log(`📝 Database file: backend/data/db.json`);
+    console.log(`📝 Database file: ${fileDB.storagePath}`);
 
     if (env.isDev) {
       console.log(`⚠️  File-based storage active - PostgreSQL migration pending`);
     }
   } catch (error) {
     console.error("❌ Database initialization failed:", error.message);
-    if (!env.isDev) {
-      process.exit(1);
-    }
+    throw error;
   }
 };
 

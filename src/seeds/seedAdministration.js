@@ -170,12 +170,17 @@ async function seed() {
     await seedMasterData(Department, DEFAULT_DEPARTMENTS, "Department");
 
     console.log("\n🎉 Administration seed completed successfully.\n");
-    process.exit(0);
   } catch (error) {
     console.error("\n❌ Administration seed failed:", error.message);
-    console.error(error);
-    process.exit(1);
+    throw error;
   }
 }
 
-seed();
+if (require.main === module) {
+  seed().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { seed };

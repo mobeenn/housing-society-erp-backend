@@ -1,8 +1,11 @@
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
 const crypto = require("crypto");
 
-const UPLOADS_DIR = path.resolve(__dirname, "../../../../uploads");
+const UPLOADS_DIR = process.env.VERCEL
+  ? path.join(os.tmpdir(), "housing-society-erp", "uploads")
+  : path.resolve(__dirname, "../../../../uploads");
 
 class LocalStorageAdapter {
   getMulterStorage() {

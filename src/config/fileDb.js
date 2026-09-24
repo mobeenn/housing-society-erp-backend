@@ -1,8 +1,12 @@
 const fs = require("fs").promises;
 const path = require("path");
+const os = require("os");
 const crypto = require("crypto");
 
-const DB_FILE_PATH = path.join(__dirname, "../../data/db.json");
+const isVercel = Boolean(process.env.VERCEL);
+const DB_FILE_PATH = isVercel
+  ? path.join(os.tmpdir(), "housing-society-erp", "db.json")
+  : path.join(__dirname, "../../data/db.json");
 
 /**
  * File-based database manager
@@ -13,12 +17,16 @@ class FileDB {
   constructor() {
     this.data = null;
     this.initialized = false;
+    this.savePromise = Promise.resolve();
+    this.storagePath = DB_FILE_PATH;
+    this.storageMode = isVercel ? "ephemeral-vercel-tmp" : "local-json-file";
   }
 
   /**
    * Initialize the database file
    */
   async init() {
+    if (this.initialized) return;
     try {
       // Ensure data directory exists
       const dataDir = path.dirname(DB_FILE_PATH);
@@ -50,12 +58,17 @@ class FileDB {
    * Save current state to file
    */
   async save() {
-    try {
-      await fs.writeFile(DB_FILE_PATH, JSON.stringify(this.data, null, 2), "utf-8");
-    } catch (error) {
-      console.error("❌ Failed to save database:", error.message);
-      throw error;
-    }
+    this.savePromise = this.savePromise
+      .catch(() => undefined)
+      .then(async () => {
+        try {
+          await fs.writeFile(DB_FILE_PATH, JSON.stringify(this.data, null, 2), "utf-8");
+        } catch (error) {
+          console.error("❌ Failed to save database:", error.message);
+          throw error;
+        }
+      });
+    return this.savePromise;
   }
 
   /**
