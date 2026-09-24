@@ -20,7 +20,10 @@ class VercelBlobStorageAdapter {
   }
 
   async readFile(key) {
-    const normalized = path.posix.normalize(String(key || "")).replace(/^([./\\])+/, "");
+    const rawKey = String(key || "");
+    const normalized = path.posix.normalize(
+      rawKey.startsWith("documents/") ? rawKey : `documents/${path.posix.basename(rawKey)}`,
+    ).replace(/^([./\\])+/, "");
     if (!normalized.startsWith("documents/") || normalized.includes("..")) {
       throw new Error("Invalid document storage key");
     }
