@@ -7,6 +7,7 @@ const { ensureDatabaseReady } = require("./config/bootstrap");
 const startServer = async () => {
   if (env.isVercel) {
     await ensureDatabaseReady();
+    await connectDB.db.refresh();
   } else {
     await connectDB();
     startRecoveryScheduler();

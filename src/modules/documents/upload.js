@@ -13,7 +13,9 @@ const allowedTypes = new Map([
 ]);
 
 const upload = multer({
-  storage: multer.diskStorage(storage.getMulterStorage()),
+  storage: storage.usesMemoryStorage
+    ? multer.memoryStorage()
+    : multer.diskStorage(storage.getMulterStorage()),
   limits: { fileSize: 10 * 1024 * 1024, files: 1 },
   fileFilter: (_req, file, cb) => {
     const extension = path.extname(file.originalname).toLowerCase();

@@ -18,3 +18,5 @@ AUTH_TESTING_RESULTS.md
 .idea/
 .DS_Store
 Thumbs.db
+
+.vercel

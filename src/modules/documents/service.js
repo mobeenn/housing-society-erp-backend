@@ -30,7 +30,8 @@ class DocumentService {
     const logicalQuery = { relatedEntityType: data.relatedEntityType, relatedEntityId: data.relatedEntityId, type: data.type, number: data.number || null };
     const latest = await Document.findLatestVersion(logicalQuery);
     const version = (latest?.version || 0) + 1;
-    const document = await Document.create({ ...data, issueDate: normalizeDate(data.issueDate, "Issue date"), expiryDate: normalizeDate(data.expiryDate, "Expiry date"), fileUrl: null, fileName: file.originalname, storageKey: file.filename, mimeType: file.mimetype, size: file.size, version, uploadedBy: req.user._id });
+    const storageKey = await storage.persistUpload(file);
+    const document = await Document.create({ ...data, issueDate: normalizeDate(data.issueDate, "Issue date"), expiryDate: normalizeDate(data.expiryDate, "Expiry date"), fileUrl: null, fileName: file.originalname, storageKey, mimeType: file.mimetype, size: file.size, version, uploadedBy: req.user._id });
     await Document.update(document._id, { fileUrl: `/api/documents/${document._id}/download` });
     if (latest) await Document.update(latest._id, { isSuperseded: true, supersededBy: document._id });
     const saved = await Document.findById(document._id);
@@ -48,7 +49,9 @@ class DocumentService {
   static async getDownload(id) {
     const document = await Document.findById(id);
     if (!document) throw new ApiError(404, "Document not found");
-    return { document, absolutePath: storage.getAbsolutePath(document.storageKey || document.fileName) };
+    const fileBuffer = await storage.readFile(document.storageKey || document.fileName);
+    if (!fileBuffer) throw new ApiError(404, "Document file not found");
+    return { document, fileBuffer };
   }
 
   static async verify(id, status, req) {

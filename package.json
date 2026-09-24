@@ -9,6 +9,7 @@
     "test": "node --test --test-concurrency=1 test/installmentCalculator.test.js test/paymentAllocation.test.js test/constructionFlow.test.js test/complaintFlow.test.js test/maintenanceFlow.test.js test/visitorAndPassFlow.test.js test/securityAndVehiclesFlow.test.js test/hrAndStaffFlow.test.js test/recoveryCalculator.test.js test/payrollCalculator.test.js test/phase15.test.js",
     "test:rbac:e2e": "node test-rbac-e2e.js",
     "invoices:backfill": "node src/seeds/backfillInvoices.js",
+    "storage:import": "node scripts/importLocalDataToBlob.js",
     "seed": "npm run seed:roles && npm run seed:administration && npm run seed:numbering && npm run rbac:seed && npm run recovery:seed && npm run hr-payroll:seed && npm run phase15:seed",
     "recovery:seed": "node src/seeds/seedRecoveryAccess.js",
     "hr-payroll:seed": "node src/seeds/seedHrPayrollAccess.js",
@@ -37,6 +38,7 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
+    "@vercel/blob": "^2.8.0",
     "bcryptjs": "^3.0.3",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",

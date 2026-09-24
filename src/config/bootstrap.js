@@ -8,11 +8,11 @@ const { seedPhase15Access } = require("../seeds/seedPhase15Access");
 
 let readinessPromise = null;
 
-async function initializeEphemeralDemo() {
+async function initializePersistentData() {
   await connectDB();
 
-  // Every seeder is idempotent. On a warm Vercel instance these checks are
-  // cheap; after /tmp is recycled they recreate the minimum usable workspace.
+  // Every seeder is idempotent. Existing imported data is preserved; only
+  // missing base roles, settings, and RBAC records are created.
   await seedRolesAndSuperAdmin();
   await seedAdministration();
   await seedRbac();
@@ -21,12 +21,12 @@ async function initializeEphemeralDemo() {
   await seedPhase15Access();
   await db.save();
 
-  console.log(`✅ Ephemeral Vercel demo data ready (${db.storageMode}).`);
+  console.log(`✅ Persistent application data ready (${db.storageMode}).`);
 }
 
 function ensureDatabaseReady() {
   if (!readinessPromise) {
-    readinessPromise = initializeEphemeralDemo().catch((error) => {
+    readinessPromise = initializePersistentData().catch((error) => {
       readinessPromise = null;
       throw error;
     });
@@ -34,4 +34,4 @@ function ensureDatabaseReady() {
   return readinessPromise;
 }
 
-module.exports = { ensureDatabaseReady, initializeEphemeralDemo };
+module.exports = { ensureDatabaseReady, initializePersistentData };

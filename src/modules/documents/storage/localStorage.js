@@ -1,13 +1,14 @@
 const fs = require("fs");
 const path = require("path");
-const os = require("os");
 const crypto = require("crypto");
 
-const UPLOADS_DIR = process.env.VERCEL
-  ? path.join(os.tmpdir(), "housing-society-erp", "uploads")
-  : path.resolve(__dirname, "../../../../uploads");
+const UPLOADS_DIR = path.resolve(__dirname, "../../../../uploads");
 
 class LocalStorageAdapter {
+  constructor() {
+    this.usesMemoryStorage = false;
+  }
+
   getMulterStorage() {
     return {
       destination: (_req, _file, cb) => {
@@ -18,6 +19,14 @@ class LocalStorageAdapter {
         cb(null, `${Date.now()}-${crypto.randomBytes(12).toString("hex")}${extension}`);
       },
     };
+  }
+
+  async persistUpload(_file) {
+    return _file.filename;
+  }
+
+  async readFile(fileName) {
+    return fs.promises.readFile(this.getAbsolutePath(fileName));
   }
 
   getAbsolutePath(fileName) {

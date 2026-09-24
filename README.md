@@ -91,29 +91,41 @@ All endpoints follow a consistent envelope:
 { "success": false, "message": "…", "errors": [] }
 ```
 
-## Vercel Demo Deployment
+## Vercel Persistent Deployment
 
 The live frontend is hosted at:
 
 - `https://housing-society-erp-frontend.vercel.app`
 
 The backend accepts that origin by default and supports Vercel preview origins.
-For a production Vercel configuration, set these environment variables:
+For the Vercel project, set:
 
 ```bash
 NODE_ENV=production
 CORS_ORIGIN=https://housing-society-erp-frontend.vercel.app
 COOKIE_SECURE=true
 COOKIE_SAME_SITE=none
+DB_BLOB_PATH=housing-society/data/db.json
+DOCUMENTS_BLOB_PREFIX=documents
 JWT_ACCESS_SECRET=<long-random-secret>
 JWT_REFRESH_SECRET=<different-long-random-secret>
 ```
 
-`vercel.json` routes the Express application through `api/index.js`. On Vercel,
-the file database is initialized under the operating system's temporary directory
-and the base roles, administrator, settings, and RBAC records are bootstrapped
-automatically.
+Create a **private** Blob store in Vercel and connect it to the backend project.
+Vercel then supplies the store ID and rotating OIDC credentials automatically.
+The database remains the same JSON structure, and uploaded documents keep their
+existing file-oriented storage contract.
 
-> **Demo warning:** Vercel temporary storage is ephemeral. Data resets when a
-> serverless function is recycled or redeployed. Use persistent storage (for
-> example private Vercel Blob or a backend host with a disk) before production use.
+To import the current local `data/db.json` and files from `uploads/` into the
+private Blob store, pull the Vercel environment (or set a read-write token) and run:
+
+```bash
+npm run storage:import
+```
+
+`vercel.json` routes the Express application through `api/index.js`. Every request
+refreshes the JSON file from private Blob before handling business operations, and
+all create/update/delete operations are written back before the API responds.
+
+> Do not use a public Blob store. The database contains password hashes, personal
+> records, RBAC data, and financial records.

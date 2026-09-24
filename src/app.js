@@ -8,6 +8,7 @@ const cookieParser = require("cookie-parser");
 const rateLimit = require("express-rate-limit");
 
 const env = require("./config/env");
+const fileDB = require("./config/fileDb");
 const ApiResponse = require("./utils/apiResponse");
 const notFound = require("./middlewares/notFound");
 const errorHandler = require("./middlewares/errorHandler");
@@ -67,8 +68,10 @@ app.use("/api", apiLimiter);
 // Health check
 app.get("/api/health", (_req, res) => {
   ApiResponse.success(res, 200, "OK", {
-    storage: env.isVercel ? "ephemeral-demo" : "local-json-file",
-    persistence: env.isVercel ? "resets-on-cold-start-or-redeploy" : "persistent-local-file",
+    storage: fileDB.storageMode,
+    persistence: fileDB.storageMode === "private-vercel-blob"
+      ? "persistent-private-blob"
+      : "persistent-local-file",
   });
 });
 

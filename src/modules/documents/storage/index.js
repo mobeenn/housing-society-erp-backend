@@ -1,6 +1,13 @@
 const { LocalStorageAdapter } = require("./localStorage");
+const { VercelBlobStorageAdapter } = require("./vercelBlob");
 
-// Replace this adapter with an S3-compatible implementation without changing routes or the document contract.
-const storageAdapter = new LocalStorageAdapter();
+const hasBlobCredentials = Boolean(
+  process.env.BLOB_READ_WRITE_TOKEN
+    || process.env.BLOB_STORE_ID
+    || process.env.VERCEL_OIDC_TOKEN,
+);
+const storageAdapter = hasBlobCredentials
+  ? new VercelBlobStorageAdapter()
+  : new LocalStorageAdapter();
 
 module.exports = storageAdapter;

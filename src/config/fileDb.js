@@ -1,12 +1,17 @@
 const fs = require("fs").promises;
 const path = require("path");
-const os = require("os");
 const crypto = require("crypto");
+const { get, head, put } = require("@vercel/blob");
 
 const isVercel = Boolean(process.env.VERCEL);
-const DB_FILE_PATH = isVercel
-  ? path.join(os.tmpdir(), "housing-society-erp", "db.json")
-  : path.join(__dirname, "../../data/db.json");
+const hasBlobCredentials = Boolean(
+  process.env.BLOB_READ_WRITE_TOKEN
+    || process.env.BLOB_STORE_ID
+    || process.env.VERCEL_OIDC_TOKEN,
+);
+const useBlobStorage = hasBlobCredentials;
+const DB_FILE_PATH = path.join(__dirname, "../../data/db.json");
+const DB_BLOB_PATH = process.env.DB_BLOB_PATH || "housing-society/data/db.json";
 
 /**
  * File-based database manager
@@ -18,36 +23,79 @@ class FileDB {
     this.data = null;
     this.initialized = false;
     this.savePromise = Promise.resolve();
-    this.storagePath = DB_FILE_PATH;
-    this.storageMode = isVercel ? "ephemeral-vercel-tmp" : "local-json-file";
+    this.blobEtag = null;
+    this.storagePath = useBlobStorage ? DB_BLOB_PATH : DB_FILE_PATH;
+    this.storageMode = useBlobStorage ? "private-vercel-blob" : "local-json-file";
+  }
+
+  createEmptyData() {
+    return {
+      users: [],
+      roles: [],
+    };
+  }
+
+  async readBlob() {
+    const result = await get(DB_BLOB_PATH, {
+      access: "private",
+      useCache: false,
+    });
+    if (!result) return null;
+    const content = await new Response(result.stream).text();
+    return {
+      data: JSON.parse(content),
+      etag: result.blob.etag,
+    };
   }
 
   /**
-   * Initialize the database file
+   * Refresh the in-memory copy from persistent storage. This is called before
+   * each Vercel request so warm and cold function instances read the same file.
+   */
+  async refresh() {
+    if (!this.initialized) return this.init();
+    if (!useBlobStorage) return this.data;
+    const current = await this.readBlob();
+    if (!current) throw new Error(`Persistent database blob not found: ${DB_BLOB_PATH}`);
+    this.data = current.data;
+    this.blobEtag = current.etag;
+    return this.data;
+  }
+
+  /**
+   * Initialize the JSON database from local disk or private Vercel Blob.
    */
   async init() {
     if (this.initialized) return;
     try {
-      // Ensure data directory exists
-      const dataDir = path.dirname(DB_FILE_PATH);
-      await fs.mkdir(dataDir, { recursive: true });
+      if (isVercel && !useBlobStorage) {
+        throw new Error("Vercel requires a connected private Blob store. Set BLOB_READ_WRITE_TOKEN or connect Blob with OIDC.");
+      }
 
-      // Check if database file exists
-      try {
-        const fileContent = await fs.readFile(DB_FILE_PATH, "utf-8");
-        this.data = JSON.parse(fileContent);
-      } catch (error) {
-        // File doesn't exist, create initial structure
-        this.data = {
-          users: [],
-          roles: [],
-          // Add more collections as needed
-        };
-        await this.save();
+      if (useBlobStorage) {
+        const current = await this.readBlob();
+        if (current) {
+          this.data = current.data;
+          this.blobEtag = current.etag;
+        } else {
+          this.data = this.createEmptyData();
+          this.initialized = true;
+          await this.save();
+        }
+      } else {
+        const dataDir = path.dirname(DB_FILE_PATH);
+        await fs.mkdir(dataDir, { recursive: true });
+        try {
+          this.data = JSON.parse(await fs.readFile(DB_FILE_PATH, "utf-8"));
+        } catch (error) {
+          if (error.code !== "ENOENT") throw error;
+          this.data = this.createEmptyData();
+          await this.save();
+        }
       }
 
       this.initialized = true;
-      console.log("✅ File-based database initialized");
+      console.log(`✅ File-based database initialized (${this.storageMode})`);
     } catch (error) {
       console.error("❌ Failed to initialize file database:", error.message);
       throw error;
@@ -55,14 +103,27 @@ class FileDB {
   }
 
   /**
-   * Save current state to file
+   * Persist current state to local disk or private Vercel Blob.
    */
   async save() {
     this.savePromise = this.savePromise
       .catch(() => undefined)
       .then(async () => {
         try {
-          await fs.writeFile(DB_FILE_PATH, JSON.stringify(this.data, null, 2), "utf-8");
+          const payload = JSON.stringify(this.data, null, 2);
+          if (useBlobStorage) {
+            const options = {
+              access: "private",
+              addRandomSuffix: false,
+              allowOverwrite: true,
+              contentType: "application/json",
+              cacheControlMaxAge: 0,
+            };
+            await put(DB_BLOB_PATH, payload, options);
+            this.blobEtag = (await head(DB_BLOB_PATH)).etag;
+          } else {
+            await fs.writeFile(DB_FILE_PATH, payload, "utf-8");
+          }
         } catch (error) {
           console.error("❌ Failed to save database:", error.message);
           throw error;
