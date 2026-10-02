@@ -12,7 +12,7 @@
  * All relational data goes through Prisma.
  */
 
-const { createAdminClient } = require("@supabase/server/core");
+const { createClient } = require("@supabase/supabase-js");
 const env = require("./env");
 
 // Validate required env vars at module load time
@@ -27,6 +27,8 @@ if (!env.SUPABASE_SECRET_KEY) {
  * Server-side Supabase admin client.
  * Bypasses RLS. Use only for Storage operations.
  */
-const supabaseAdmin = createAdminClient();
+const supabaseAdmin = createClient(env.SUPABASE_URL, env.SUPABASE_SECRET_KEY, {
+  auth: { persistSession: false, autoRefreshToken: false },
+});
 
 module.exports = supabaseAdmin;
