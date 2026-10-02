@@ -1,7 +1,6 @@
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-const User = require("./user.model");
-const AuditLog = require("./auditLog.model");
+const { prisma } = require("../../config/prisma");
 const ApiError = require("../../utils/ApiError");
 const env = require("../../config/env");
 
@@ -11,7 +10,7 @@ class AuthService {
    */
   static generateTokens(user) {
     const payload = {
-      id: user._id,
+      id: user.id,
       email: user.email,
       name: user.name,
       roles: user.roles?.map((r) => (typeof r === "object" ? r.name : r)),
@@ -22,7 +21,7 @@ class AuthService {
     });
 
     const refreshToken = jwt.sign(
-      { id: user._id },
+      { id: user.id },
       env.JWT_REFRESH_SECRET,
       { expiresIn: env.JWT_REFRESH_EXPIRY }
     );
@@ -34,11 +33,14 @@ class AuthService {
    * Log in user with email & password.
    */
   static async login(email, password, ipAddress = null, userAgent = null) {
-    const user = await User.findOne({ email: email.toLowerCase() });
+    const user = await prisma.user.findUnique({
+      where: { email: email.toLowerCase() },
+      include: { userRoles: { include: { role: true } } },
+    });
 
     if (!user) {
       // Log failed login attempt
-      await AuditLog.create({
+      await this._safeCreateAuditLog({
         userId: null,
         action: "login",
         ip: ipAddress,
@@ -51,8 +53,8 @@ class AuthService {
 
     if (!user.isActive) {
       // Log disabled account attempt
-      await AuditLog.create({
-        userId: user._id,
+      await this._safeCreateAuditLog({
+        userId: user.id,
         action: "login",
         ip: ipAddress,
         userAgent: userAgent,
@@ -62,11 +64,13 @@ class AuthService {
       throw new ApiError(403, "Account is disabled. Please contact the administrator.");
     }
 
-    const isMatch = await bcrypt.compare(password, user.passwordHash);
+    // Accounts created without a password (staff/reference records) can never
+    // authenticate, but must not throw inside bcrypt.
+    const isMatch = user.passwordHash ? await bcrypt.compare(password, user.passwordHash) : false;
     if (!isMatch) {
       // Log wrong password attempt
-      await AuditLog.create({
-        userId: user._id,
+      await this._safeCreateAuditLog({
+        userId: user.id,
         action: "login",
         ip: ipAddress,
         userAgent: userAgent,
@@ -76,21 +80,17 @@ class AuthService {
       throw new ApiError(401, "Invalid email or password");
     }
 
-    // Populate roles
-    await User.populate(user, "roles");
-
     // Update last login timestamp
-    await User.updateOne(
-      { _id: user._id },
-      { $set: { lastLoginAt: new Date().toISOString() } }
-    );
-    user.lastLoginAt = new Date().toISOString();
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { lastLoginAt: new Date() },
+    });
 
     const { accessToken, refreshToken } = this.generateTokens(user);
 
     // Log successful login
-    await AuditLog.create({
-      userId: user._id,
+    await this._safeCreateAuditLog({
+      userId: user.id,
       action: "login",
       ip: ipAddress,
       userAgent: userAgent,
@@ -98,9 +98,12 @@ class AuthService {
       meta: { email: user.email },
     });
 
-    // Return sanitized user object
-    const userObj = { ...user };
-    delete userObj.passwordHash;
+    // Return sanitized user object.
+    // The legacy API returned a populated `roles` array, so keep that exact
+    // response shape: expose `roles`, and do not leak the raw `userRoles`
+    // join rows or the password hash.
+    const { passwordHash, userRoles, ...safe } = user;
+    const userObj = { ...safe, roles: userRoles.map((entry) => entry.role) };
 
     return { user: userObj, accessToken, refreshToken };
   }
@@ -115,14 +118,14 @@ class AuthService {
 
     try {
       const decoded = jwt.verify(refreshToken, env.JWT_REFRESH_SECRET);
-      const user = await User.findById(decoded.id);
+      const user = await prisma.user.findUnique({
+        where: { id: decoded.id },
+        include: { userRoles: { include: { role: true } } },
+      });
 
       if (!user || !user.isActive) {
         throw new ApiError(401, "Invalid or expired token");
       }
-
-      // Populate roles
-      await User.populate(user, "roles");
 
       const tokens = this.generateTokens(user);
       return tokens;
@@ -135,7 +138,7 @@ class AuthService {
    * Log out user (for audit trail).
    */
   static async logout(userId, ipAddress = null, userAgent = null) {
-    await AuditLog.create({
+    await this._safeCreateAuditLog({
       userId,
       action: "logout",
       ip: ipAddress,
@@ -149,7 +152,9 @@ class AuthService {
    * Change user password.
    */
   static async changePassword(userId, currentPassword, newPassword, ipAddress = null, userAgent = null) {
-    const user = await User.findById(userId);
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+    });
 
     if (!user) {
       throw new ApiError(404, "User not found");
@@ -158,7 +163,7 @@ class AuthService {
     const isMatch = await bcrypt.compare(currentPassword, user.passwordHash);
     if (!isMatch) {
       // Log failed password change
-      await AuditLog.create({
+      await this._safeCreateAuditLog({
         userId,
         action: "change_password",
         ip: ipAddress,
@@ -170,13 +175,13 @@ class AuthService {
     }
 
     const newPasswordHash = await bcrypt.hash(newPassword, 10);
-    await User.updateOne(
-      { _id: userId },
-      { $set: { passwordHash: newPasswordHash, mustResetPassword: false } }
-    );
+    await prisma.user.update({
+      where: { id: userId },
+      data: { passwordHash: newPasswordHash, mustResetPassword: false },
+    });
 
     // Log successful password change
-    await AuditLog.create({
+    await this._safeCreateAuditLog({
       userId,
       action: "change_password",
       ip: ipAddress,
@@ -186,6 +191,30 @@ class AuthService {
     });
 
     return { message: "Password updated successfully" };
+  }
+
+  /**
+   * Safely create an audit log entry — never throws.
+   * Used for auth events that are not financial/ownership changes.
+   */
+  static async _safeCreateAuditLog({ userId, action, ip, userAgent, status, meta }) {
+    try {
+      await prisma.auditLog.create({
+        data: {
+          userId: userId || null,
+          entityType: "auth",
+          entityId: userId || null,
+          action,
+          ip: ip || null,
+          userAgent: userAgent || null,
+          status,
+          meta: meta || {},
+        },
+      });
+    } catch (err) {
+      // Never break the main request
+      console.error("[AuditLog] Failed to write audit log:", err.message);
+    }
   }
 }
 

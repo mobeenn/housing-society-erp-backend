@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
-    "test": "node --test --test-concurrency=1 test/installmentCalculator.test.js test/paymentAllocation.test.js test/constructionFlow.test.js test/complaintFlow.test.js test/maintenanceFlow.test.js test/visitorAndPassFlow.test.js test/securityAndVehiclesFlow.test.js test/hrAndStaffFlow.test.js test/recoveryCalculator.test.js test/payrollCalculator.test.js test/phase15.test.js",
+    "test": "node scripts/runTests.js",
     "test:rbac:e2e": "node test-rbac-e2e.js",
     "invoices:backfill": "node src/seeds/backfillInvoices.js",
     "storage:import": "node scripts/importLocalDataToBlob.js",
@@ -24,7 +24,23 @@
     "seed:administration": "node src/seeds/seedAdministration.js",
     "seed:numbering": "node src/seeds/seedNumberingRules.js",
     "lint": "eslint src/",
-    "format": "prettier --write src/"
+    "format": "prettier --write src/",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:deploy": "prisma migrate deploy",
+    "prisma:studio": "prisma studio",
+    "postinstall": "prisma generate",
+    "prisma:seed": "prisma db seed",
+    "db:import:legacy": "node scripts/migrateFileDbToPostgres.js",
+    "db:import:legacy:dry": "node scripts/migrateFileDbToPostgres.js --dry-run",
+    "db:verify:import": "node scripts/verifyImport.js --manifest",
+    "db:verify:import:file": "node scripts/verifyImport.js",
+    "db:verify:runtime": "node scripts/verifyRuntime.js",
+    "db:baseline:save": "node scripts/snapshotBaseline.js save",
+    "db:baseline:restore": "node scripts/snapshotBaseline.js restore",
+    "hr:backfill-departments": "node scripts/backfillEmployeeDepartments.js",
+    "db:verify:reports": "node scripts/verifyReports.js",
+    "test:file": "node scripts/runTests.js --no-setup"
   },
   "keywords": [
     "housing-society",
@@ -35,9 +51,13 @@
   ],
   "license": "PRIVATE",
   "engines": {
-    "node": ">=18.0.0"
+    "node": "^20.19 || ^22.12 || >=24.0"
   },
   "dependencies": {
+    "@prisma/adapter-pg": "^7.10.0",
+    "@prisma/client": "^7.10.0",
+    "@supabase/server": "^1.8.1",
+    "@supabase/supabase-js": "^2.117.2",
     "@vercel/blob": "^2.8.0",
     "bcryptjs": "^3.0.3",
     "cookie-parser": "^1.4.7",
@@ -52,6 +72,7 @@
     "morgan": "^1.12.1",
     "multer": "^2.4.0",
     "pdfkit": "^0.20.2",
+    "pg": "^8.23.0",
     "qrcode": "^1.5.4",
     "uuid": "^11.1.1",
     "zod": "^4.6.5"
@@ -62,6 +83,7 @@
   "devDependencies": {
     "eslint": "^10.11.0",
     "nodemon": "^3.1.14",
-    "prettier": "^3.9.8"
+    "prettier": "^3.9.8",
+    "prisma": "^7.10.0"
   }
 }

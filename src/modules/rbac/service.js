@@ -1,7 +1,4 @@
-const { db } = require("../../config/db");
-const Role = require("../auth/role.model");
-const Module = require("./module.model");
-const { RoleModuleAccess, ACTIONS, defaultActions } = require("./access.model");
+const { prisma } = require("../../config/prisma");
 const ApiError = require("../../utils/ApiError");
 
 const RBAC_MIGRATION_VERSION = "dynamic-rbac-v3";
@@ -43,6 +40,10 @@ const legacyModuleByPrefix = {
   notices: "notices",
   dashboards: "dashboards",
 };
+
+const ACTIONS = ["view", "create", "edit", "delete", "approve", "reject", "cancel", "print", "export", "refund"];
+
+const defaultActions = () => Object.fromEntries(ACTIONS.map((action) => [action, false]));
 
 function legacyPermissionToModuleAction(permission) {
   if (!permission || typeof permission !== "string") return null;
@@ -107,9 +108,9 @@ function legacyPermissionToModuleActions(permission) {
 class RbacService {
   static roleIds(user) {
     return [...new Set([
-      ...(user?.roles || []).map((role) => (typeof role === "object" ? role._id : role)).filter(Boolean),
+      ...(user?.roles || []).map((role) => (typeof role === "object" ? role.id : role)).filter(Boolean),
       user?.roleId,
-      typeof user?.role === "object" ? user.role._id : user?.role,
+      typeof user?.role === "object" ? user.role.id : user?.role,
     ].filter(Boolean))];
   }
 
@@ -132,11 +133,16 @@ class RbacService {
   }
 
   static async registryModules() {
-    return Module.find({}, { sort: { sortOrder: 1 } });
+    return prisma.rbacModule.findMany({
+      orderBy: { sortOrder: "asc" },
+    });
   }
 
   static async activeModules() {
-    return Module.find({ isActive: true }, { sort: { sortOrder: 1 } });
+    return prisma.rbacModule.findMany({
+      where: { isActive: true },
+      orderBy: { sortOrder: "asc" },
+    });
   }
 
   static async catalog() {
@@ -161,7 +167,7 @@ class RbacService {
     const modules = await this.activeModules();
     if (this.isSuperAdmin(user)) {
       return {
-        userId: user._id,
+        userId: user.id,
         roleIds: this.roleIds(user),
         isSuperAdmin: true,
         dashboardType: this.dashboardTypeForUser(user),
@@ -183,16 +189,18 @@ class RbacService {
     }
 
     const roleIds = this.roleIds(user);
-    const records = await RoleModuleAccess.find({});
+    const records = await prisma.roleModuleAccess.findMany({
+      where: { roleId: { in: roleIds }, isVisible: true },
+    });
     const byModule = new Map();
-    records.filter((record) => roleIds.includes(record.role) && record.isVisible).forEach((record) => {
-      const current = byModule.get(record.module) || defaultActions();
+    records.filter((record) => roleIds.includes(record.roleId) && record.isVisible).forEach((record) => {
+      const current = byModule.get(record.moduleId) || defaultActions();
       ACTIONS.forEach((action) => { current[action] = current[action] || record.actions?.[action] === true; });
-      byModule.set(record.module, current);
+      byModule.set(record.moduleId, current);
     });
 
     return {
-      userId: user._id,
+      userId: user.id,
       roleIds,
       isSuperAdmin: false,
       dashboardType: this.dashboardTypeForUser(user),
@@ -206,37 +214,43 @@ class RbacService {
         route: module.route,
         sortOrder: module.sortOrder,
         isActive: module.isActive,
-        isVisible: byModule.has(module._id),
-        actions: byModule.get(module._id) || defaultActions(),
+        isVisible: byModule.has(module.id),
+        actions: byModule.get(module.id) || defaultActions(),
       })),
     };
   }
 
   static async getRoleAccessGrid(roleId) {
-    const role = await Role.findById(roleId);
+    const role = await prisma.role.findUnique({
+      where: { id: roleId },
+    });
     if (!role) throw new ApiError(404, "Role not found");
     const modules = await this.registryModules();
     if (role.name === "Super Admin" || role.permissions?.includes("system:admin")) {
       return {
-        role: { _id: role._id, name: role.name, description: role.description, isSystem: Boolean(role.isSystem || role.isSystemRole), isSystemRole: Boolean(role.isSystemRole) },
+        role: { id: role.id, name: role.name, description: role.description, isSystem: Boolean(role.isSystem || role.isSystemRole), isSystemRole: Boolean(role.isSystemRole) },
         readOnly: true,
         modules: modules.map((module) => ({ ...module, isVisible: true, actions: Object.fromEntries(ACTIONS.map((action) => [action, true])) })),
       };
     }
-    const records = await RoleModuleAccess.find({ role: roleId });
-    const byModule = new Map(records.map((record) => [record.module, record]));
+    const records = await prisma.roleModuleAccess.findMany({
+      where: { roleId },
+    });
+    const byModule = new Map(records.map((record) => [record.moduleId, record]));
     return {
-      role: { _id: role._id, name: role.name, description: role.description, isSystem: Boolean(role.isSystem || role.isSystemRole), isSystemRole: Boolean(role.isSystemRole) },
+      role: { id: role.id, name: role.name, description: role.description, isSystem: Boolean(role.isSystem || role.isSystemRole), isSystemRole: Boolean(role.isSystemRole) },
       readOnly: false,
       modules: modules.map((module) => {
-        const record = byModule.get(module._id);
+        const record = byModule.get(module.id);
         return { ...module, isVisible: record?.isVisible === true, actions: record?.actions || defaultActions() };
       }),
     };
   }
 
   static async updateRoleAccess(roleId, payload, updatedBy) {
-    const role = await Role.findById(roleId);
+    const role = await prisma.role.findUnique({
+      where: { id: roleId },
+    });
     if (!role) throw new ApiError(404, "Role not found");
     if (role.name === "Super Admin" || role.permissions?.includes("system:admin")) {
       throw new ApiError(400, "Super Admin access is managed automatically and cannot be changed");
@@ -266,31 +280,53 @@ class RbacService {
     // hidden so a stale record can never survive a partial UI save.
     for (const module of modules) {
       const update = updateByKey.get(module.key) || { isVisible: false, actions: {} };
-      await RoleModuleAccess.upsert(roleId, module._id, {
-        isVisible: update.isVisible,
-        actions: update.actions || {},
-        updatedBy,
+      await prisma.roleModuleAccess.upsert({
+        where: { roleId_moduleId: { roleId, moduleId: module.id } },
+        create: {
+          roleId,
+          moduleId: module.id,
+          isVisible: update.isVisible,
+          actions: update.actions || {},
+          updatedById: updatedBy,
+        },
+        update: {
+          isVisible: update.isVisible,
+          actions: update.actions || {},
+          updatedById: updatedBy,
+        },
       });
     }
     return this.getRoleAccessGrid(roleId);
   }
 
   static async ensureRoleModuleAccess(roleId) {
-    const role = await Role.findById(roleId);
+    const role = await prisma.role.findUnique({
+      where: { id: roleId },
+    });
     if (!role) return;
     const [modules, records] = await Promise.all([
       this.registryModules(),
-      RoleModuleAccess.find({ role: roleId }),
+      prisma.roleModuleAccess.findMany({ where: { roleId } }),
     ]);
-    const existingModuleIds = new Set(records.map((record) => record.module));
+    const existingModuleIds = new Set(records.map((record) => record.moduleId));
     for (const module of modules) {
-      if (existingModuleIds.has(module._id)) continue;
+      if (existingModuleIds.has(module.id)) continue;
       const actions = defaultActions();
       if (role.name === "Super Admin" || role.permissions?.includes("system:admin")) {
-        await RoleModuleAccess.upsert(roleId, module._id, {
-          isVisible: true,
-          actions: Object.fromEntries(ACTIONS.map((action) => [action, true])),
-          updatedBy: null,
+        await prisma.roleModuleAccess.upsert({
+          where: { roleId_moduleId: { roleId, moduleId: module.id } },
+          create: {
+            roleId,
+            moduleId: module.id,
+            isVisible: true,
+            actions: Object.fromEntries(ACTIONS.map((action) => [action, true])),
+            updatedById: null,
+          },
+          update: {
+            isVisible: true,
+            actions: Object.fromEntries(ACTIONS.map((action) => [action, true])),
+            updatedById: null,
+          },
         });
         continue;
       }
@@ -299,50 +335,69 @@ class RbacService {
           if (mapped.module === module.key) actions[mapped.action] = true;
         }
       }
-      await RoleModuleAccess.upsert(roleId, module._id, {
-        isVisible: ACTIONS.some((action) => actions[action]),
-        actions,
-        updatedBy: null,
+      await prisma.roleModuleAccess.upsert({
+        where: { roleId_moduleId: { roleId, moduleId: module.id } },
+        create: {
+          roleId,
+          moduleId: module.id,
+          isVisible: ACTIONS.some((action) => actions[action]),
+          actions,
+          updatedById: null,
+        },
+        update: {
+          isVisible: ACTIONS.some((action) => actions[action]),
+          actions,
+          updatedById: null,
+        },
       });
     }
   }
 
   static async migrateLegacyAccess({ force = false } = {}) {
-    const [roles, modules] = await Promise.all([Role.find({}), this.registryModules()]);
-    const previous = db.data.rbacMigration || {};
-    const fingerprints = previous.roleFingerprints || {};
+    const [roles, modules] = await Promise.all([
+      prisma.role.findMany(),
+      this.registryModules(),
+    ]);
+    const previous = await prisma.masterData.findFirst({
+      where: { type: "rbacMigration", name: "migration" },
+    });
+    const fingerprints = previous ? JSON.parse(previous.description || "{}") : {};
     const currentFingerprints = Object.fromEntries(roles.map((role) => [
-      role._id,
+      role.id,
       JSON.stringify([...new Set(role.permissions || [])].sort()),
     ]));
     const moduleKeys = modules.map((module) => module.key);
-    const moduleSetChanged = JSON.stringify(previous.moduleKeys || []) !== JSON.stringify(moduleKeys);
+    const moduleSetChanged = JSON.stringify(previous?.code || "") !== JSON.stringify(moduleKeys);
     const changedRoleIds = roles
-      .filter((role) => force || fingerprints[role._id] !== currentFingerprints[role._id])
-      .map((role) => role._id);
+      .filter((role) => force || fingerprints[role.id] !== currentFingerprints[role.id])
+      .map((role) => role.id);
 
-    if (!force && previous.version === RBAC_MIGRATION_VERSION && !moduleSetChanged && changedRoleIds.length === 0) {
-      return { migrated: false, version: previous.version, roleCount: roles.length };
+    if (!force && previous?.name === RBAC_MIGRATION_VERSION && !moduleSetChanged && changedRoleIds.length === 0) {
+      return { migrated: false, version: previous.name, roleCount: roles.length };
     }
 
-    if (force || previous.version !== RBAC_MIGRATION_VERSION) {
-      for (const role of roles) await this.migrateRoleAccess(role._id);
+    if (force || previous?.name !== RBAC_MIGRATION_VERSION) {
+      for (const role of roles) await this.migrateRoleAccess(role.id);
     } else {
       for (const roleId of changedRoleIds) await this.migrateRoleAccess(roleId);
       if (moduleSetChanged) {
-        for (const role of roles) await this.ensureRoleModuleAccess(role._id);
+        for (const role of roles) await this.ensureRoleModuleAccess(role.id);
       }
     }
 
-    db.data.rbacMigration = {
-      version: RBAC_MIGRATION_VERSION,
-      migratedAt: new Date().toISOString(),
-      moduleCount: modules.length,
-      roleCount: roles.length,
-      moduleKeys,
-      roleFingerprints: currentFingerprints,
-    };
-    await db.save();
+    await prisma.masterData.upsert({
+      where: { type_name: { type: "rbacMigration", name: "migration" } },
+      create: {
+        type: "rbacMigration",
+        name: "migration",
+        code: JSON.stringify(moduleKeys),
+        description: JSON.stringify(currentFingerprints),
+      },
+      update: {
+        code: JSON.stringify(moduleKeys),
+        description: JSON.stringify(currentFingerprints),
+      },
+    });
     return {
       migrated: true,
       version: RBAC_MIGRATION_VERSION,
@@ -353,17 +408,29 @@ class RbacService {
   }
 
   static async migrateRoleAccess(roleId) {
-    const role = await Role.findById(roleId);
+    const role = await prisma.role.findUnique({
+      where: { id: roleId },
+    });
     if (!role) throw new ApiError(404, "Role not found");
     const modules = await this.registryModules();
     const isSuperAdmin = role.name === "Super Admin" || role.permissions?.includes("system:admin");
     for (const module of modules) {
       const actions = defaultActions();
       if (isSuperAdmin) {
-        await RoleModuleAccess.upsert(roleId, module._id, {
-          isVisible: true,
-          actions: Object.fromEntries(ACTIONS.map((action) => [action, true])),
-          updatedBy: null,
+        await prisma.roleModuleAccess.upsert({
+          where: { roleId_moduleId: { roleId, moduleId: module.id } },
+          create: {
+            roleId,
+            moduleId: module.id,
+            isVisible: true,
+            actions: Object.fromEntries(ACTIONS.map((action) => [action, true])),
+            updatedById: null,
+          },
+          update: {
+            isVisible: true,
+            actions: Object.fromEntries(ACTIONS.map((action) => [action, true])),
+            updatedById: null,
+          },
         });
         continue;
       }
@@ -372,10 +439,20 @@ class RbacService {
           if (mapped.module === module.key) actions[mapped.action] = true;
         }
       }
-      await RoleModuleAccess.upsert(roleId, module._id, {
-        isVisible: ACTIONS.some((action) => actions[action]),
-        actions,
-        updatedBy: null,
+      await prisma.roleModuleAccess.upsert({
+        where: { roleId_moduleId: { roleId, moduleId: module.id } },
+        create: {
+          roleId,
+          moduleId: module.id,
+          isVisible: ACTIONS.some((action) => actions[action]),
+          actions,
+          updatedById: null,
+        },
+        update: {
+          isVisible: ACTIONS.some((action) => actions[action]),
+          actions,
+          updatedById: null,
+        },
       });
     }
     return roleId;
@@ -384,11 +461,15 @@ class RbacService {
   static async isAllowed(user, moduleKey, action) {
     if (this.isSuperAdmin(user)) return true;
     if (!ACTIONS.includes(action)) return false;
-    const modules = await Module.find({ key: moduleKey, isActive: true });
+    const modules = await prisma.rbacModule.findMany({
+      where: { key: moduleKey, isActive: true },
+    });
     if (!modules.length) return false;
     const roleIds = this.roleIds(user);
-    const records = await RoleModuleAccess.find({ module: modules[0]._id });
-    return records.some((record) => roleIds.includes(record.role) && record.isVisible === true && record.actions?.[action] === true);
+    const records = await prisma.roleModuleAccess.findMany({
+      where: { moduleId: modules[0].id },
+    });
+    return records.some((record) => roleIds.includes(record.roleId) && record.isVisible === true && record.actions?.[action] === true);
   }
 }
 

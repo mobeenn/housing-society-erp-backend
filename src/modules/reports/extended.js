@@ -1,6 +1,7 @@
 const { db } = require("../../config/db");
 const { Plot } = require("../properties/plot.model");
 const { OPEN_STATUSES } = require("../complaints/complaint.config");
+const sql = require("./sql");
 
 const catalog = [
   { key: "property-inventory", module: "Property", label: "Property Inventory", description: "Plot inventory by status, block and category." },
@@ -53,12 +54,10 @@ async function ownershipTransfers(filters) {
 }
 
 async function occupancy() {
-  const [plots, blocks] = await Promise.all([db.collection("plots").find({}), db.collection("blocks").find({})]);
-  const blockName = new Map(blocks.map((item) => [item._id, item.name]));
-  const grouped = new Map();
-  plots.forEach((plot) => { const key = blockName.get(plot.block) || "Unassigned"; const item = grouped.get(key) || { block: key, total: 0, occupied: 0, available: 0, reserved: 0 }; item.total += 1; if (plot.currentOwner) item.occupied += 1; if (plot.status === Plot.STATUS.AVAILABLE) item.available += 1; if (plot.status === Plot.STATUS.RESERVED) item.reserved += 1; grouped.set(key, item); });
-  const data = Array.from(grouped.values()).map((item) => ({ ...item, occupancyRate: item.total ? Number(((item.occupied / item.total) * 100).toFixed(1)) : 0 }));
-  return { report: "occupancy", data, total: data.length, summary: { totalPlots: plots.length, occupied: plots.filter((item) => item.currentOwner).length, available: plots.filter((item) => item.status === Plot.STATUS.AVAILABLE).length } };
+  // Grouped in PostgreSQL (GROUP BY + FILTER); previously loaded every plot
+  // into Node and reduced in JavaScript.
+  const { data, summary } = await sql.occupancy();
+  return { report: "occupancy", data, total: data.length, summary };
 }
 
 async function operationsSla(filters) {
@@ -71,9 +70,13 @@ async function operationsSla(filters) {
 
 async function staffPerformance(filters) {
   const range = rangeFor(filters);
-  const [employees, attendance, leaves, workOrders] = await Promise.all([db.collection("employees").find({}), db.collection("attendance").find({}), db.collection("leaveRequests").find({}), db.collection("workOrders").find({})]);
-  const data = employees.map((employee) => { const employeeAttendance = attendance.filter((item) => item.employee === employee._id && inRange(item.date, range)); const employeeLeaves = leaves.filter((item) => item.employee === employee._id && inRange(item.createdAt, range)); const assignedOrders = workOrders.filter((item) => item.assignedStaff === employee._id); return { employeeId: employee.employeeId, name: employee.name, department: employee.department, designation: employee.designation, present: employeeAttendance.filter((item) => item.status === "Present").length, absent: employeeAttendance.filter((item) => item.status === "Absent").length, leaveRequests: employeeLeaves.length, assignedWorkOrders: assignedOrders.length, openWorkOrders: assignedOrders.filter((item) => ["Open", "InProgress"].includes(item.status)).length }; });
-  return { report: "staff-performance", range, data, total: data.length };
+  // Attendance / leave / work-order counts are aggregated in PostgreSQL;
+  // previously four full tables were loaded and cross-filtered in JS (N x M).
+  const { data, total } = await sql.staffPerformance({
+    start: range.start.toISOString(),
+    end: range.end.toISOString(),
+  });
+  return { report: "staff-performance", range, data, total };
 }
 
 async function hrAttendance(filters) {

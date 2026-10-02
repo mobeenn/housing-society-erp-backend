@@ -1,15 +1,6 @@
-const SocietySettings = require("./societySettings.model");
-const NumberingRule = require("./numberingRule.model");
-const {
-  Block,
-  Street,
-  PlotCategory,
-  PropertyType,
-  Department,
-  NocType,
-} = require("./masterData.model");
-const { AuditLog, createAuditLog } = require("./auditLog.model");
+const { prisma } = require("../../config/prisma");
 const ApiError = require("../../utils/ApiError");
+const { createAuditLog } = require("./auditLog.model");
 
 /**
  * Administration Service
@@ -18,18 +9,75 @@ const ApiError = require("../../utils/ApiError");
 class AdministrationService {
   // ── Society Settings ──────────────────────────────
   static async getSocietySettings() {
-    return await SocietySettings.get();
+    const settings = await prisma.societySettings.findFirst({
+      where: { id: "default" },
+    });
+
+    if (!settings) {
+      // Return defaults if no settings exist
+      return {
+        id: "default",
+        name: "Housing Society",
+        logo: null,
+        address: {},
+        fiscalYear: {},
+        currency: "PKR",
+        feeSettings: {},
+        enableSubDealerOverride: false,
+        subDealerOverrideRate: null,
+        recoveryAutoBlockThreshold: 49,
+        recoveryAllowSelfReserve: false,
+        contactInfo: {},
+        updatedById: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+    }
+
+    return settings;
   }
 
   static async updateSocietySettings(data, req) {
-    const before = await SocietySettings.get();
-    const updated = await SocietySettings.update(data);
+    const before = await this.getSocietySettings();
+
+    const updated = await prisma.societySettings.upsert({
+      where: { id: "default" },
+      create: {
+        id: "default",
+        name: data.name || "Housing Society",
+        logo: data.logo || null,
+        address: data.address || {},
+        fiscalYear: data.fiscalYear || {},
+        currency: data.currency || "PKR",
+        feeSettings: data.feeSettings || {},
+        enableSubDealerOverride: data.enableSubDealerOverride || false,
+        subDealerOverrideRate: data.subDealerOverrideRate || null,
+        recoveryAutoBlockThreshold: data.recoveryAutoBlockThreshold || 49,
+        recoveryAllowSelfReserve: data.recoveryAllowSelfReserve || false,
+        contactInfo: data.contactInfo || {},
+        updatedById: req.user?.id || null,
+      },
+      update: {
+        name: data.name,
+        logo: data.logo,
+        address: data.address,
+        fiscalYear: data.fiscalYear,
+        currency: data.currency,
+        feeSettings: data.feeSettings,
+        enableSubDealerOverride: data.enableSubDealerOverride,
+        subDealerOverrideRate: data.subDealerOverrideRate,
+        recoveryAutoBlockThreshold: data.recoveryAutoBlockThreshold,
+        recoveryAllowSelfReserve: data.recoveryAllowSelfReserve,
+        contactInfo: data.contactInfo,
+        updatedById: req.user?.id || null,
+      },
+    });
 
     await createAuditLog({
       req,
       entityType: "SocietySettings",
-      entityId: updated._id,
-      action: AuditLog.ACTIONS.UPDATE,
+      entityId: updated.id,
+      action: "update",
       changes: { before, after: updated },
     });
 
@@ -38,24 +86,30 @@ class AdministrationService {
 
   // ── Numbering Rules ───────────────────────────────
   static async getNumberingRules() {
-    return await NumberingRule.find({});
+    return await prisma.numberingRule.findMany({
+      orderBy: { entityType: "asc" },
+    });
   }
 
   static async updateNumberingRule(id, data, req) {
-    const rules = await NumberingRule.find({ _id: id });
-    const before = rules[0];
+    const before = await prisma.numberingRule.findUnique({
+      where: { id },
+    });
 
     if (!before) {
       throw new ApiError(404, "Numbering rule not found");
     }
 
-    const updated = await NumberingRule.update(id, data);
+    const updated = await prisma.numberingRule.update({
+      where: { id },
+      data,
+    });
 
     await createAuditLog({
       req,
       entityType: "NumberingRule",
       entityId: id,
-      action: AuditLog.ACTIONS.UPDATE,
+      action: "update",
       changes: { before, after: updated },
     });
 
@@ -63,44 +117,61 @@ class AdministrationService {
   }
 
   static async getNextNumber(entityType) {
-    return await NumberingRule.getNextNumber(entityType);
+    const numberingService = require("./numbering.service");
+    return await numberingService.getNextNumber(entityType);
   }
 
   // ── Master Data Generic Handlers ─────────────────
   static _getModel(type) {
     switch (type) {
       case "blocks":
-        return Block;
+        return { model: "prisma.block", field: "block" };
       case "streets":
-        return Street;
+        return { model: "prisma.street", field: "street" };
       case "plot-categories":
-        return PlotCategory;
+        return { model: "prisma.plotCategory", field: "plotCategory" };
       case "property-types":
-        return PropertyType;
+        return { model: "prisma.propertyType", field: "propertyType" };
       case "departments":
-        return Department;
+        return { model: "prisma.department", field: "department" };
       case "noc-types":
-        return NocType;
+        return { model: "prisma.nocType", field: "nocType" };
       default:
         throw new ApiError(400, `Invalid master data type: ${type}`);
     }
   }
 
   static async getMasterData(type, includeArchived = false) {
-    const model = this._getModel(type);
-    const query = includeArchived ? {} : { isActive: true };
-    return await model.find(query);
+    const { model } = this._getModel(type);
+    const prismaModel = eval(model);
+
+    const where = includeArchived ? {} : { isActive: true };
+
+    return await prismaModel.findMany({
+      where,
+      orderBy: { name: "asc" },
+    });
   }
 
   static async createMasterData(type, data, req) {
-    const model = this._getModel(type);
-    const created = await model.create(data, req.user._id);
+    const { model } = this._getModel(type);
+    const prismaModel = eval(model);
+
+    const created = await prismaModel.create({
+      data: {
+        name: data.name,
+        code: data.code || null,
+        description: data.description || null,
+        isActive: data.isActive !== undefined ? data.isActive : true,
+        createdById: req.user?.id || null,
+      },
+    });
 
     await createAuditLog({
       req,
       entityType: type,
-      entityId: created._id,
-      action: AuditLog.ACTIONS.CREATE,
+      entityId: created.id,
+      action: "create",
       changes: { after: created },
     });
 
@@ -108,20 +179,27 @@ class AdministrationService {
   }
 
   static async updateMasterData(type, id, data, req) {
-    const model = this._getModel(type);
-    const before = await model.findById(id);
+    const { model } = this._getModel(type);
+    const prismaModel = eval(model);
+
+    const before = await prismaModel.findUnique({
+      where: { id },
+    });
 
     if (!before) {
       throw new ApiError(404, "Item not found");
     }
 
-    const updated = await model.update(id, data);
+    const updated = await prismaModel.update({
+      where: { id },
+      data,
+    });
 
     await createAuditLog({
       req,
       entityType: type,
       entityId: id,
-      action: AuditLog.ACTIONS.UPDATE,
+      action: "update",
       changes: { before, after: updated },
     });
 
@@ -129,20 +207,27 @@ class AdministrationService {
   }
 
   static async archiveMasterData(type, id, req) {
-    const model = this._getModel(type);
-    const before = await model.findById(id);
+    const { model } = this._getModel(type);
+    const prismaModel = eval(model);
+
+    const before = await prismaModel.findUnique({
+      where: { id },
+    });
 
     if (!before) {
       throw new ApiError(404, "Item not found");
     }
 
-    const updated = await model.archive(id);
+    const updated = await prismaModel.update({
+      where: { id },
+      data: { isActive: false },
+    });
 
     await createAuditLog({
       req,
       entityType: type,
       entityId: id,
-      action: AuditLog.ACTIONS.STATUS_CHANGE,
+      action: "statusChange",
       changes: { before, after: updated },
       meta: { action: "archive" },
     });
@@ -151,20 +236,27 @@ class AdministrationService {
   }
 
   static async restoreMasterData(type, id, req) {
-    const model = this._getModel(type);
-    const before = await model.findById(id);
+    const { model } = this._getModel(type);
+    const prismaModel = eval(model);
+
+    const before = await prismaModel.findUnique({
+      where: { id },
+    });
 
     if (!before) {
       throw new ApiError(404, "Item not found");
     }
 
-    const updated = await model.restore(id);
+    const updated = await prismaModel.update({
+      where: { id },
+      data: { isActive: true },
+    });
 
     await createAuditLog({
       req,
       entityType: type,
       entityId: id,
-      action: AuditLog.ACTIONS.STATUS_CHANGE,
+      action: "statusChange",
       changes: { before, after: updated },
       meta: { action: "restore" },
     });
@@ -182,26 +274,27 @@ class AdministrationService {
     startDate,
     endDate,
   }) {
-    const query = {};
+    const where = {};
 
-    if (entityType) query.entityType = entityType;
-    if (userId) query.userId = userId;
-    if (action) query.action = action;
+    if (entityType) where.entityType = entityType;
+    if (userId) where.userId = userId;
+    if (action) where.action = action;
 
     if (startDate || endDate) {
-      query.timestamp = {};
-      if (startDate) query.timestamp.$gte = new Date(startDate).toISOString();
-      if (endDate) query.timestamp.$lte = new Date(endDate).toISOString();
+      where.timestamp = {};
+      if (startDate) where.timestamp.gte = new Date(startDate);
+      if (endDate) where.timestamp.lte = new Date(endDate);
     }
 
     const skip = (page - 1) * limit;
-    const logs = await AuditLog.find(query, {
+    const logs = await prisma.auditLog.findMany({
+      where,
+      orderBy: { timestamp: "desc" },
       skip,
-      limit: parseInt(limit, 10),
-      sort: { timestamp: -1 },
+      take: parseInt(limit, 10),
     });
 
-    const total = await AuditLog.count(query);
+    const total = await prisma.auditLog.count({ where });
 
     return {
       logs,

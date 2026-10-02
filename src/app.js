@@ -8,7 +8,8 @@ const cookieParser = require("cookie-parser");
 const rateLimit = require("express-rate-limit");
 
 const env = require("./config/env");
-const fileDB = require("./config/fileDb");
+const { prisma } = require("./config/prisma");
+const supabaseAdmin = require("./config/supabase");
 const ApiResponse = require("./utils/apiResponse");
 const notFound = require("./middlewares/notFound");
 const errorHandler = require("./middlewares/errorHandler");
@@ -66,12 +67,40 @@ app.use("/api", apiLimiter);
 // ══════════════════════════════════════════════════
 
 // Health check
-app.get("/api/health", (_req, res) => {
+app.get("/api/health", async (_req, res) => {
+  // Check database connectivity
+  let database = "down";
+  let tableCount = null;
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    database = "up";
+    const [{ count }] = await prisma.$queryRaw`
+      SELECT COUNT(*)::int AS count
+      FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+      AND table_name <> '_prisma_migrations'
+    `;
+    tableCount = count;
+  } catch {
+    database = "down";
+  }
+
+  // Check storage connectivity
+  let storage = "down";
+  try {
+    const { error } = await supabaseAdmin.storage.listBuckets();
+    if (!error) storage = "up";
+  } catch {
+    storage = "down";
+  }
+
   ApiResponse.success(res, 200, "OK", {
-    storage: fileDB.storageMode,
-    persistence: fileDB.storageMode === "private-vercel-blob"
-      ? "persistent-private-blob"
-      : "persistent-local-file",
+    database,
+    storage,
+    // The datastore is PostgreSQL via Prisma. data/db.json is no longer opened
+    // at runtime; it is only read by the one-time import script.
+    persistence: "postgresql-prisma",
+    tables: tableCount,
   });
 });
 
@@ -152,6 +181,11 @@ app.use("/api/buyback", buybackRoutes);
 app.use("/api/registry", registryRoutes);
 app.use("/api/appointments", appointmentRoutes);
 app.use("/api/procurement", procurementRoutes);
+
+// Browsers request /favicon.ico on every page load. This is a JSON API, so
+// there is no icon to serve — answer 204 instead of letting it fall through to
+// the 404 handler.
+app.get("/favicon.ico", (_req, res) => res.status(204).end());
 
 // ── Catch-all & error handler ───────────────────
 app.use(notFound);

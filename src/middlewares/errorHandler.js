@@ -43,9 +43,14 @@ const errorHandler = (err, req, res, _next) => {
     message = "Token expired";
   }
 
-  // Log in development
-  if (env.isDev) {
+  // Log in development.
+  // Only unexpected errors get a stack trace. A 404 for an unknown route is
+  // routine client traffic (typos, /favicon.ico, scanners) and printing a full
+  // stack for it buries real failures in noise.
+  if (env.isDev && statusCode >= 500) {
     console.error("❌ Error:", err);
+  } else if (env.isDev && statusCode !== 404) {
+    console.warn(`⚠️  ${req.method} ${req.originalUrl} → ${statusCode}: ${message}`);
   }
 
   return ApiResponse.error(res, statusCode, message, errors);

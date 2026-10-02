@@ -1,11 +1,11 @@
 const { db } = require("../../config/db");
-const Member = require("../members/member.model");
 const { User } = require("../auth/user.model");
 const { Complaint } = require("../complaints/complaint.model");
 const { OPEN_STATUSES } = require("../complaints/complaint.config");
 const { Department } = require("../administration/masterData.model");
 const { Plot } = require("../properties/plot.model");
 const extendedReports = require("./extended");
+const sql = require("./sql");
 const ApiError = require("../../utils/ApiError");
 
 const getDateRange = ({ startDate, endDate }) => {
@@ -16,90 +16,70 @@ const getDateRange = ({ startDate, endDate }) => {
   return { start: start.toISOString(), end: end.toISOString() };
 };
 
-const matchDate = (field, range, extra = {}) => ({ ...extra, [field]: { $gte: range.start, $lte: range.end } });
-
+/**
+ * Aggregations run in PostgreSQL (see ./sql.js). The response shape below is
+ * unchanged from the previous in-memory implementation.
+ */
 class ReportService {
   static async collection(filters) {
-    const range = getDateRange(filters); const format = filters.interval === "daily" ? "%Y-%m-%d" : "%Y-%m";
-    const data = await db.collection("payments").aggregate([{ $match: matchDate("createdAt", range, { status: "Completed" }) }, { $group: { _id: { $dateToString: { format, date: "$createdAt" } }, amount: { $sum: "$amount" }, count: { $sum: 1 } } }, { $sort: { _id: 1 } }]);
-    return { report: "collection", range, interval: filters.interval === "daily" ? "daily" : "monthly", data: data.map((row) => ({ period: row._id, amount: row.amount, count: row.count })), total: data.reduce((sum, row) => sum + row.amount, 0) };
+    const range = getDateRange(filters);
+    const interval = filters.interval === "daily" ? "daily" : "monthly";
+    const { data, total } = await sql.collection({ ...range, interval });
+    return { report: "collection", range, interval, data, total };
   }
 
   static async dues(filters) {
     const range = getDateRange(filters);
-    const data = await db.collection("installments").aggregate([{ $match: matchDate("dueDate", range, { balance: { $gt: 0 } }) }, { $group: { _id: "$status", amount: { $sum: "$balance" }, count: { $sum: 1 } } }, { $sort: { _id: 1 } }]);
-    return { report: "dues", range, data: data.map((row) => ({ status: row._id, amount: row.amount, count: row.count })), total: data.reduce((sum, row) => sum + row.amount, 0) };
+    const { data, total } = await sql.dues(range);
+    return { report: "dues", range, data, total };
   }
 
   static async defaulters(filters) {
-    const range = getDateRange(filters); const today = new Date().toISOString();
-    const data = await db.collection("installments").aggregate([{ $match: { dueDate: { $gte: range.start, $lte: range.end, $lt: today }, balance: { $gt: 0 } } }, { $group: { _id: "$member", amount: { $sum: "$balance" }, count: { $sum: 1 } } }, { $sort: { amount: -1 } }]);
-    const rows = await Promise.all(data.map(async (row) => ({ memberId: row._id, member: await Member.findById(row._id), overdueAmount: row.amount, installments: row.count })));
-    return { report: "defaulters", range, data: rows.map((row) => ({ memberId: row.memberId, memberName: row.member?.name || "Unknown", memberNumber: row.member?.memberId || "—", overdueAmount: row.overdueAmount, installments: row.installments })), total: rows.reduce((sum, row) => sum + row.overdueAmount, 0) };
+    const range = getDateRange(filters);
+    const { data, total } = await sql.defaulters(range);
+    return { report: "defaulters", range, data, total };
   }
 
   static async incomeExpense(filters) {
-    const range = getDateRange(filters); const format = filters.interval === "daily" ? "%Y-%m-%d" : "%Y-%m";
-    const [income, expense] = await Promise.all([
-      db.collection("payments").aggregate([{ $match: matchDate("createdAt", range, { status: "Completed" }) }, { $group: { _id: { $dateToString: { format, date: "$createdAt" } }, amount: { $sum: "$amount" } } }, { $sort: { _id: 1 } }]),
-      db.collection("expenses").aggregate([{ $match: matchDate("date", range, { status: "Paid" }) }, { $group: { _id: { $dateToString: { format, date: "$date" } }, amount: { $sum: "$amount" } } }, { $sort: { _id: 1 } }]),
-    ]);
-    const periods = new Map(); income.forEach((row) => periods.set(row._id, { period: row._id, income: row.amount, expense: 0 })); expense.forEach((row) => periods.set(row._id, { period: row._id, income: periods.get(row._id)?.income || 0, expense: row.amount }));
-    const data = Array.from(periods.values()).sort((a, b) => a.period.localeCompare(b.period));
-    return { report: "income-expense", range, data, totals: { income: data.reduce((sum, row) => sum + row.income, 0), expense: data.reduce((sum, row) => sum + row.expense, 0) } };
+    const range = getDateRange(filters);
+    const interval = filters.interval === "daily" ? "daily" : "monthly";
+    const { data, totals } = await sql.incomeExpense({ ...range, interval });
+    return { report: "income-expense", range, data, totals };
   }
 
   static async refunds(filters) {
     const range = getDateRange(filters);
-    const data = await db.collection("refunds").aggregate([{ $match: matchDate("createdAt", range) }, { $group: { _id: "$status", amount: { $sum: "$amount" }, count: { $sum: 1 } } }, { $sort: { _id: 1 } }]);
-    return { report: "refunds", range, data: data.map((row) => ({ status: row._id, amount: row.amount, count: row.count })), total: data.reduce((sum, row) => sum + row.amount, 0) };
+    const { data, total } = await sql.refunds(range);
+    return { report: "refunds", range, data, total };
   }
 
   /** Complaints report: open / overdue / by-category / by-department / avg resolution time */
   static async complaints(filters = {}) {
     const range = filters.startDate || filters.endDate ? getDateRange(filters) : null;
-    const rangeMatch = range ? matchDate("createdAt", range) : {};
-    const nowIso = new Date().toISOString();
+    const grouped = await sql.complaints({ start: range?.start || null, end: range?.end || null });
 
-    // Aggregations over the complaints collection
-    const [byStatus, byCategory, byDepartmentAgg, overdue, resolved] = await Promise.all([
-      db.collection(Complaint.collectionName).aggregate([{ $match: rangeMatch }, { $group: { _id: "$status", count: { $sum: 1 } } }, { $sort: { _id: 1 } }]),
-      db.collection(Complaint.collectionName).aggregate([{ $match: rangeMatch }, { $group: { _id: "$category", count: { $sum: 1 } } }, { $sort: { count: -1 } }]),
-      db.collection(Complaint.collectionName).aggregate([{ $match: rangeMatch }, { $group: { _id: "$assignedDepartment", count: { $sum: 1 } } }, { $sort: { count: -1 } }]),
-      db.collection(Complaint.collectionName).countDocuments({ ...rangeMatch, status: { $in: OPEN_STATUSES }, slaDueDate: { $lt: nowIso } }),
-      db.collection(Complaint.collectionName).find({ ...rangeMatch, status: Complaint.STATUS.RESOLVED, resolvedAt: { $ne: null } }),
-    ]);
-
-    const open = byStatus
-      .filter((row) => OPEN_STATUSES.includes(row._id))
-      .reduce((sum, row) => sum + row.count, 0);
-    const total = byStatus.reduce((sum, row) => sum + row.count, 0);
-
-    const byDepartment = await Promise.all(
-      byDepartmentAgg.map(async (row) => {
-        const department = row._id ? await Department.findById(row._id) : null;
-        return { departmentId: row._id || null, departmentName: department?.name || "Unassigned", count: row.count };
-      })
-    );
-
-    const resolutionHours = resolved.map(
-      (c) => (new Date(c.resolvedAt).getTime() - new Date(c.createdAt).getTime()) / 3600000
-    );
-    const avgResolutionTimeHours = resolutionHours.length
-      ? Number((resolutionHours.reduce((sum, h) => sum + h, 0) / resolutionHours.length).toFixed(2))
-      : null;
+    // Department names still need a lookup, but only for the handful of
+    // distinct departments in the result rather than one query per row.
+    const departmentIds = grouped.byDepartment.map((row) => row.departmentId).filter(Boolean);
+    const departments = departmentIds.length ? await Department.find({}) : [];
+    const nameById = new Map(departments.map((item) => [item._id, item.name]));
+    const byDepartment = grouped.byDepartment.map((row) => ({
+      departmentId: row.departmentId,
+      departmentName: (row.departmentId && nameById.get(row.departmentId)) || "Unassigned",
+      count: row.count,
+    }));
 
     return {
       report: "complaints",
       range,
       data: {
-        total,
-        open,
-        overdue,
-        resolved: resolved.length,
-        avgResolutionTimeHours,
-        byStatus: byStatus.map((row) => ({ status: row._id, count: row.count })),
-        byCategory: byCategory.map((row) => ({ category: row._id, count: row.count })),
+        total: grouped.total,
+        open: grouped.open,
+        overdue: grouped.overdue,
+        resolved: grouped.resolved,
+        avgResolutionTimeHours: grouped.avgResolutionTimeHours,
+        byStatus: grouped.byStatus,
+        byCategory: grouped.byCategory,
         byDepartment,
       },
     };

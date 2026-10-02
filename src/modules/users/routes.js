@@ -4,12 +4,17 @@ const router = express.Router();
 const UserController = require("./controller");
 const validate = require("../../middlewares/validate");
 const { authenticate, authorize } = require("../../middlewares/auth");
-const { createUserSchema, updateUserSchema } = require("./validation");
+const { createUserSchema, updateUserSchema, listUsersSchema } = require("./validation");
 
 // All user routes require authentication
 router.use(authenticate);
 
-router.get("/", authorize("users-roles", "edit"), UserController.getAll);
+router.get(
+  "/",
+  authorize("users-roles", "edit"),
+  validate(listUsersSchema, "query"),
+  UserController.getAll
+);
 router.get("/:id", authorize("users-roles", "edit"), UserController.getById);
 router.post(
   "/",

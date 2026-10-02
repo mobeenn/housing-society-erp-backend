@@ -1,8 +1,13 @@
 const { db } = require("../../config/db");
+const { prisma } = require("../../config/prisma");
 
 /**
  * User Model
- * Manages user documents in the file-based database
+ *
+ * Thin adapter used by the services that were not rewritten to Prisma yet.
+ * Role membership is owned by the `user_roles` join table — the legacy inline
+ * `roles` array on the user document has been removed, so `populate()` and
+ * `create()` both go through Prisma here.
  */
 class User {
   static collectionName = "users";
@@ -38,12 +43,23 @@ class User {
       phone: userData.phone?.trim(),
       memberId: userData.memberId || null,
       passwordHash: userData.passwordHash,
-      roles: userData.roles || [],
       isActive: userData.isActive !== undefined ? userData.isActive : true,
       lastLoginAt: userData.lastLoginAt || null,
       mustResetPassword: userData.mustResetPassword || false,
       createdBy: userData.createdBy || null,
     });
+
+    // Role assignment goes through the join table, the single source of truth.
+    const roleIds = (userData.roles || []).filter((role) => typeof role === "string" && role);
+    for (const roleId of roleIds) {
+      await prisma.userRole.upsert({
+        where: { userId_roleId: { userId: result.insertedId, roleId } },
+        create: { userId: result.insertedId, roleId },
+        update: {},
+      });
+    }
+
+    result.roles = roleIds;
     return result;
   }
 
@@ -69,32 +85,37 @@ class User {
   }
 
   /**
-   * Populate roles for a user document
+   * Populate roles for a user document.
+   *
+   * Reads the `user_roles` join table (the single source of truth) rather than
+   * a role array embedded on the user row. Role objects are returned with both
+   * `id` and the legacy `_id` so existing consumers keep working.
    */
   static async populate(user, field) {
     if (!user) return null;
 
     if (field === "roles") {
-      const Role = require("./role.model");
-      if (user.roles && user.roles.length > 0) {
-        user.roles = await Promise.all(
-          user.roles.map(async (roleId) => {
-            if (typeof roleId === "object" && roleId !== null && roleId.permissions) {
-              return roleId;
-            }
-            const role = await Role.findById(roleId);
-            return role || roleId;
-          })
-        );
-        if (!user.role && user.roles[0]) {
+      const userId = user.id || user._id;
+      if (!userId) return user;
+
+      const rows = await prisma.userRole.findMany({
+        where: { userId },
+        include: { role: true },
+      });
+
+      // A user with no join rows but a legacy single `roleId` still resolves.
+      if (!rows.length && user.roleId) {
+        const single = await prisma.role.findUnique({ where: { id: user.roleId } });
+        if (single) {
+          user.roles = [{ ...single, _id: single.id }];
           user.role = user.roles[0];
+          return user;
         }
-      } else if (user.roleId) {
-        const role = await Role.findById(user.roleId);
-        if (role) {
-          user.roles = [role];
-          user.role = role;
-        }
+      }
+
+      user.roles = rows.map((row) => ({ ...row.role, _id: row.role.id }));
+      if (!user.role && user.roles[0]) {
+        user.role = user.roles[0];
       }
     }
 

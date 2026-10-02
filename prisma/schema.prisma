@@ -1,0 +1,1677 @@
+// Prisma schema for Housing Society ERP
+// Migration from file-based DB to Supabase PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ══════════════════════════════════════════════════════════════
+// ENUMS
+// ══════════════════════════════════════════════════════════════
+
+enum MemberStatus {
+  Active
+  Inactive
+  Blacklisted
+}
+
+enum PlotStatus {
+  Available
+  Reserved
+  Booked
+  Allotted
+  Sold
+  Transferred
+  Cancelled
+  Possessed
+  UnderConstruction
+  Constructed
+  Merged
+  BoughtBack
+}
+
+enum BookingStatus {
+  PendingApproval
+  Confirmed
+  Cancelled
+}
+
+enum PaymentStatus {
+  Completed
+  Reversed
+}
+
+enum RefundStatus {
+  Pending
+  Approved
+  Rejected
+  Paid
+}
+
+enum InvoiceStatus {
+  Active
+  Cancelled
+}
+
+enum InvoiceType {
+  Booking
+  Installment
+  Transfer
+  NOC
+  Possession
+  Construction
+  PlotMerge
+  BuyBack
+  Expense
+  OtherTransaction
+  VendorCommission
+}
+
+enum ExpenseStatus {
+  Pending
+  Approved
+  Rejected
+  Paid
+}
+
+enum TransferStatus {
+  Draft
+  PendingVerification
+  PendingApproval
+  Approved
+  Rejected
+  Completed
+}
+
+enum ConstructionStatus {
+  Applied
+  UnderReview
+  Approved
+  Rejected
+}
+
+enum NocStatus {
+  Applied
+  UnderVerification
+  DuesPending
+  Approved
+  Issued
+  Rejected
+}
+
+enum PossessionStatus {
+  Applied
+  UnderVerification
+  Approved
+  Possessed
+}
+
+enum BuyBackStatus {
+  Pending
+  Completed
+  Failed
+}
+
+enum BuyBackType {
+  BuyBack
+  Cancel
+}
+
+enum ComplaintStatus {
+  New
+  Assigned
+  InProgress
+  Resolved
+  Reopened
+  Closed
+}
+
+enum Priority {
+  Low
+  Medium
+  High
+  Urgent
+}
+
+enum WorkOrderStatus {
+  Open
+  InProgress
+  Completed
+  Cancelled
+}
+
+enum AssetType {
+  road
+  light
+  park
+  water
+  sewerage
+  drainage
+  building
+  other
+}
+
+enum VehicleType {
+  Car
+  Bike
+  Van
+  Truck
+  SUV
+  Other
+}
+
+enum VehicleStatus {
+  Active
+  Blocked
+  Expired
+}
+
+enum PassType {
+  Visitor
+  Staff
+  Contractor
+}
+
+enum PassStatus {
+  Active
+  Expired
+  Cancelled
+}
+
+enum BlacklistAction {
+  Warn
+  Block
+}
+
+enum GuardShift {
+  Morning
+  Evening
+  Night
+}
+
+enum GuardStatus {
+  Active
+  Inactive
+  Suspended
+}
+
+enum AttendanceStatus {
+  Present
+  Absent
+  Leave
+}
+
+enum AppointmentStatus {
+  Waiting
+  InMeeting
+  Done
+}
+
+enum RecoveryStatus {
+  Assigned
+  InProgress
+  Resolved
+  Reassigned
+}
+
+enum RecoveryOutcome {
+  Connected
+  NoAnswer
+  PromiseToPay
+  Paid
+  Escalated
+  WrongNumber
+  Other
+}
+
+enum PayrollStatus {
+  Draft
+  Approved
+  Paid
+}
+
+enum LoanStatus {
+  Active
+  Closed
+}
+
+enum LeaveType {
+  Annual
+  Sick
+  Casual
+  Unpaid
+  Maternity
+  Paternity
+}
+
+enum LeaveStatus {
+  Pending
+  Approved
+  Rejected
+  Cancelled
+}
+
+enum EmployeeStatus {
+  Active
+  OnLeave
+  Resigned
+  Terminated
+}
+
+enum DocumentVerificationStatus {
+  Pending
+  Verified
+  Rejected
+}
+
+enum VendorStatus {
+  Active
+  Inactive
+  Blacklisted
+}
+
+enum VendorCategory {
+  Construction
+  Electrical
+  Plumbing
+  Security
+  Cleaning
+  IT
+  Stationery
+  General
+}
+
+enum PurchaseRequestStatus {
+  Pending
+  Approved
+  Rejected
+  Cancelled
+  Completed
+}
+
+enum QuotationStatus {
+  Submitted
+  Selected
+  Rejected
+  Expired
+}
+
+enum PurchaseOrderStatus {
+  Draft
+  Approved
+  Sent
+  PartiallyReceived
+  Completed
+  Cancelled
+}
+
+enum GrnInspectionStatus {
+  Passed
+  PartiallyPassed
+  Failed
+}
+
+enum AuditAction {
+  create
+  update
+  delete
+  approve
+  reject
+  cancel
+  statusChange
+  login
+  logout
+}
+
+enum NumberingResetPolicy {
+  never
+  daily
+  yearly
+  monthly
+}
+
+enum SalaryComponentType {
+  Earning
+  Deduction
+}
+
+enum SalaryComponentCalculationType {
+  Fixed
+  Percentage
+}
+
+enum DealerStatus {
+  Active
+  Inactive
+  Suspended
+  Blacklisted
+}
+
+enum CommissionType {
+  Percentage
+  Flat
+}
+
+enum PaymentMethod {
+  Cash
+  BankTransfer
+  Cheque
+  Online
+  Challan
+}
+
+enum CommissionLedgerType {
+  Accrual
+  Override
+  Payout
+  Reversal
+}
+
+enum AccountType {
+  Asset
+  Liability
+  Equity
+  Revenue
+  Expense
+}
+
+enum JournalSourceType {
+  Payment
+  Refund
+  Expense
+  Payroll
+  Transfer
+  Adjustment
+  OpeningBalance
+}
+
+enum JournalStatus {
+  Draft
+  Posted
+  Reversed
+}
+
+// ══════════════════════════════════════════════════════════════
+// MODELS — Wave 1: identity, RBAC, administration
+//
+// Conventions (must match prisma/migrations/.../add_constraints_and_indexes):
+//   - table names are snake_case via @@map
+//   - column names stay camelCase (unmapped), quoted in raw SQL
+// ══════════════════════════════════════════════════════════════
+
+model User {
+  id                 String    @id @default(uuid())
+  name               String
+  email              String    @unique
+  phone              String?
+  /// Legacy portal-link: the member this login is bound to. Kept as a plain
+  /// String reference for compatibility with the fileDB shape.
+  memberId           String?
+  /// Nullable for parity with the legacy store, which allowed password-less
+  /// rows (service/staff accounts created for reference only). Such an account
+  /// cannot log in: AuthService rejects a login when this is null.
+  passwordHash       String?
+  isActive           Boolean   @default(true)
+  mustResetPassword  Boolean   @default(false)
+  lastLoginAt        DateTime?
+  createdById        String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  createdBy    User?     @relation("UserCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdUsers User[]    @relation("UserCreatedBy")
+  userRoles    UserRole[]
+  auditLogs    AuditLog[]
+
+  @@map("users")
+}
+
+model Role {
+  id           String   @id @default(uuid())
+  name         String   @unique
+  description  String?
+  permissions  String[] @default([])
+  isSystemRole Boolean  @default(false)
+  isSystem     Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  userRoles UserRole[]
+  accesses  RoleModuleAccess[]
+
+  @@map("roles")
+}
+
+model UserRole {
+  id        String   @id @default(uuid())
+  userId    String
+  roleId    String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+  @@map("user_roles")
+}
+
+model RbacModule {
+  id            String  @id @default(uuid())
+  key           String  @unique
+  label         String
+  description   String?
+  group         String?
+  icon          String?
+  route         String?
+  sortOrder     Int     @default(0)
+  isActive      Boolean @default(true)
+  showInSidebar Boolean @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  accesses RoleModuleAccess[]
+
+  @@map("rbac_modules")
+}
+
+model RoleModuleAccess {
+  id          String   @id @default(uuid())
+  roleId      String
+  moduleId    String
+  isVisible   Boolean  @default(false)
+  actions     Json     @default("{}")
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  role   Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  module RbacModule @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, moduleId])
+  @@map("role_module_access")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?
+  /// Nullable: createAuditLog() defaults entityType to null, and several
+  /// call sites log an action without naming an entity.
+  entityType String?
+  entityId   String?
+  action     String
+  ip         String?
+  userAgent  String?
+  status     String?
+  changes    Json?
+  meta       Json?
+  timestamp  DateTime @default(now())
+  createdAt  DateTime?
+  updatedAt  DateTime? @updatedAt
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([entityType, entityId])
+  @@index([timestamp])
+  @@map("audit_logs")
+}
+
+/// Generic key/value store also used by the RBAC migration fingerprint
+/// marker (type = "rbacMigration", name = "migration").
+model MasterData {
+  id          String   @id @default(uuid())
+  type        String
+  name        String
+  code        String?
+  description String?
+  isActive    Boolean  @default(true)
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([type, name])
+  @@map("master_data")
+}
+
+/// Table name and column names are referenced directly by
+/// src/modules/administration/numbering.service.js raw SQL
+/// (UPDATE "numbering_rules" ... RETURNING "currentSequence", ...).
+model NumberingRule {
+  id               String                 @id @default(uuid())
+  entityType       String                 @unique
+  prefix           String
+  currentSequence  Int                    @default(0)
+  padLength        Int                    @default(6)
+  resetPolicy      NumberingResetPolicy   @default(never)
+  lastResetPeriod  String?
+  isActive         Boolean                @default(true)
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+
+  @@map("numbering_rules")
+}
+
+model SocietySettings {
+  id                        String   @id @default("default")
+  name                      String   @default("Housing Society")
+  logo                      String?
+  address                   Json     @default("{}")
+  fiscalYear                Json     @default("{}")
+  currency                  String   @default("PKR")
+  feeSettings               Json     @default("{}")
+  enableSubDealerOverride   Boolean  @default(false)
+  subDealerOverrideRate     Decimal? @db.Decimal(14, 2)
+  recoveryAutoBlockThreshold Int      @default(49)
+  recoveryAllowSelfReserve  Boolean  @default(false)
+  contactInfo               Json     @default("{}")
+  updatedById               String?
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  @@map("society_settings")
+}
+
+// ── Master data lookups (referenced by administration/service.js) ──
+
+model Block {
+  id          String   @id @default(uuid())
+  name        String
+  code        String?
+  description String?
+  isActive    Boolean  @default(true)
+  archivedAt   DateTime?
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("blocks")
+}
+
+model Street {
+  id          String   @id @default(uuid())
+  name        String
+  code        String?
+  description String?
+  isActive    Boolean  @default(true)
+  archivedAt   DateTime?
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("streets")
+}
+
+model PlotCategory {
+  id          String   @id @default(uuid())
+  name        String
+  code        String?
+  description String?
+  isActive    Boolean  @default(true)
+  archivedAt   DateTime?
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("plot_categories")
+}
+
+model PropertyType {
+  id          String   @id @default(uuid())
+  name        String
+  code        String?
+  description String?
+  isActive    Boolean  @default(true)
+  archivedAt   DateTime?
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("property_types")
+}
+
+model Department {
+  id          String   @id @default(uuid())
+  name        String
+  code        String?
+  description String?
+  isActive    Boolean  @default(true)
+  archivedAt   DateTime?
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  employees Employee[]
+
+  @@map("departments")
+}
+
+model NocType {
+  id          String   @id @default(uuid())
+  name        String
+  code        String?
+  description String?
+  isActive    Boolean  @default(true)
+  archivedAt   DateTime?
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("noc_types")
+}
+
+// ══════════════════════════════════════════════════════════════
+// MODELS — Wave 2: ERP data migrated from the legacy fileDB (db.json)
+//
+// Design notes (read before changing these):
+//  • `id` has NO default and is NOT auto-generated. The migration imports the
+//    original legacy `_id`, which keeps every cross-reference (plot.currentOwner
+//    -> member id, payment allocations -> installment id) intact. Do not switch
+//    these to @default(uuid()).
+//  • Cross-entity references are plain `String` columns, not Prisma relations.
+//    The legacy data contains loose references that do not always resolve, and
+//    real FKs would abort the import. Typed relations can be introduced later,
+//    once the data is clean.
+//  • Status/priority columns are `String`, not the enums above, so that a value
+//    present in db.json can never fail an insert. Enums are applied when the
+//    individual services are rewritten (S4.2+).
+//  • All money is `Decimal` — never Float.
+//  • Embedded arrays/objects (documents, approvalStages, comments, items) are
+//    `Json` to preserve them exactly as stored.
+// ══════════════════════════════════════════════════════════════
+
+model Member {
+  id                String    @id
+  memberId          String?
+  membershipNumber  String?
+  /// Nullable for legacy parity: the fileDB accepted member documents that
+  /// carried only `fullName` and no `name` (e.g. records written by imports
+  /// and tests). Member.create always sets `name`.
+  name              String?
+  /// Alternate name field present in some legacy records.
+  fullName          String?
+  fatherName        String?
+  cnic              String?
+  phone             String?
+  email             String?
+  /// Json because the legacy shape is polymorphic: most records hold a plain
+  /// address string, some hold {current, permanent}.
+  address           Json?
+  /// Json for the same reason: either a string or {mobile, email, ...}.
+  contact           Json?
+  nominee           Json?
+  status            String?
+  photo             String?
+  documents         Json?
+  userId            String?
+  createdBy         String?
+  createdAt         DateTime?
+  updatedAt         DateTime?
+
+  @@index([cnic])
+  @@index([memberId])
+  @@map("members")
+}
+
+model Plot {
+  id           String    @id
+  plotNumber   String?
+  block        String?
+  street       String?
+  size         String?
+  category     String?
+  propertyType String?
+  fileNumber   String?
+  location     String?
+  currentOwner String?
+  ownerSince   DateTime?
+  status       String?
+  price        Decimal?  @db.Decimal(14, 2)
+  isBlocked    Boolean?
+  createdBy    String?
+  createdAt    DateTime?
+  updatedAt    DateTime?
+
+  @@index([plotNumber])
+  @@index([currentOwner])
+  @@map("plots")
+}
+
+model OwnershipHistory {
+  id        String    @id
+  plot      String
+  member    String
+  fromDate  DateTime?
+  toDate    DateTime?
+  type      String?
+  remarks   String?
+  createdAt DateTime?
+  updatedAt DateTime?
+
+  @@index([plot])
+  @@index([member])
+  @@map("ownership_history")
+}
+
+model Booking {
+  id                  String    @id
+  member              String
+  plot                String
+  bookingDate         DateTime?
+  price               Decimal?  @db.Decimal(14, 2)
+  discount            Decimal?  @db.Decimal(14, 2)
+  developmentCharges  Decimal?  @db.Decimal(14, 2)
+  additionalCharges   Decimal?  @db.Decimal(14, 2)
+  bookingAmount       Decimal?  @db.Decimal(14, 2)
+  refundAmount        Decimal?  @db.Decimal(14, 2)
+  status              String?
+  planTemplate        Json?
+  cancellationReason  String?
+  approvedBy          String?
+  approvedAt          DateTime?
+  createdBy           String?
+  createdAt           DateTime?
+  updatedAt           DateTime?
+
+  @@index([member])
+  @@index([plot])
+  @@map("bookings")
+}
+
+model InstallmentPlan {
+  id                    String    @id
+  booking               String
+  totalAmount           Decimal?  @db.Decimal(14, 2)
+  numberOfInstallments  Int?
+  frequency             String?
+  generatedInstallments Json?
+  createdAt             DateTime?
+  updatedAt             DateTime?
+
+  @@index([booking])
+  @@map("installment_plans")
+}
+
+model Installment {
+  id             String    @id
+  plan           String?
+  member         String?
+  plot           String?
+  dueDate        DateTime?
+  amount         Decimal?  @db.Decimal(14, 2)
+  penaltyAmount  Decimal?  @db.Decimal(14, 2)
+  discountAmount Decimal?  @db.Decimal(14, 2)
+  paidAmount     Decimal?  @db.Decimal(14, 2)
+  balance        Decimal?  @db.Decimal(14, 2)
+  status         String?
+  overdueDays    Int?
+  createdAt      DateTime?
+  updatedAt      DateTime?
+
+  @@index([member])
+  @@index([plot])
+  @@index([dueDate])
+  @@index([status])
+  @@map("installments")
+}
+
+model Payment {
+  id            String    @id
+  receiptNumber String?
+  member        String?
+  plot          String?
+  amount        Decimal?  @db.Decimal(14, 2)
+  method        String?
+  allocations   Json?
+  collectedBy   String?
+  remarks       String?
+  status        String?
+  createdAt     DateTime?
+  updatedAt     DateTime?
+
+  @@index([member])
+  @@index([status])
+  @@map("payments")
+}
+
+model Refund {
+  id          String    @id
+  member      String?
+  plot        String?
+  booking     String?
+  amount      Decimal?  @db.Decimal(14, 2)
+  reason      String?
+  status      String?
+  approvedBy  String?
+  approvedAt  DateTime?
+  paidAt      DateTime?
+  rejection   String?
+  createdBy   String?
+  createdAt   DateTime?
+  updatedAt   DateTime?
+
+  @@index([member])
+  @@map("refunds")
+}
+
+model Expense {
+  id                  String    @id
+  category            String?
+  vendor              String?
+  amount              Decimal?  @db.Decimal(14, 2)
+  date                DateTime?
+  supportingDocuments Json?
+  status              String?
+  approvedBy          String?
+  rejectedBy          String?
+  paidAt              DateTime?
+  createdBy           String?
+  createdAt           DateTime?
+  updatedAt           DateTime?
+
+  @@index([status])
+  @@index([date])
+  @@map("expenses")
+}
+
+model Vendor {
+  id                  String    @id
+  name                String
+  contactPerson       String?
+  phone               String?
+  email               String?
+  address             String?
+  category            String?
+  taxId               String?
+  ntn                 String?
+  documents           Json?
+  paymentTerms        String?
+  status              String?
+  performanceNotes    String?
+  outstandingBalance  Decimal?  @db.Decimal(14, 2)
+  createdBy           String?
+  createdAt           DateTime?
+  updatedAt           DateTime?
+
+  @@index([name])
+  @@index([status])
+  @@map("vendors")
+}
+
+model PurchaseRequest {
+  id               String    @id
+  requestNumber    String?
+  requestedBy      String?
+  department       String?
+  itemDescription  String?
+  quantity         Decimal?  @db.Decimal(14, 2)
+  estimatedCost    Decimal?  @db.Decimal(14, 2)
+  justification    String?
+  requiredDate     DateTime?
+  priority         String?
+  status           String?
+  approvedBy       String?
+  approvedAt       DateTime?
+  rejectionReason  String?
+  documents        Json?
+  remarks          String?
+  createdBy        String?
+  createdAt        DateTime?
+  updatedAt        DateTime?
+
+  @@index([status])
+  @@map("purchase_requests")
+}
+
+model Quotation {
+  id                String    @id
+  quotationNumber   String?
+  purchaseRequest   String?
+  vendor            String?
+  amount            Decimal?  @db.Decimal(14, 2)
+  currency          String?
+  validUntil        DateTime?
+  paymentTerms      String?
+  deliveryTerms     String?
+  warrantyTerms     String?
+  items             Json?
+  documents         Json?
+  status            String?
+  remarks           String?
+  createdBy         String?
+  createdAt         DateTime?
+  updatedAt         DateTime?
+
+  @@index([vendor])
+  @@index([status])
+  @@map("quotations")
+}
+
+model PurchaseOrder {
+  id                 String    @id
+  poNumber           String?
+  purchaseRequest    String?
+  selectedVendor     String?
+  selectedQuotation  String?
+  items              Json?
+  totalAmount        Decimal?  @db.Decimal(14, 2)
+  currency           String?
+  paymentTerms       String?
+  deliveryTerms      String?
+  deliveryDate       DateTime?
+  status             String?
+  approvedBy         String?
+  approvedAt         DateTime?
+  sentAt             DateTime?
+  completedAt        DateTime?
+  cancelledAt        DateTime?
+  cancellationReason String?
+  documents          Json?
+  remarks            String?
+  createdBy          String?
+  createdAt          DateTime?
+  updatedAt          DateTime?
+
+  @@index([selectedVendor])
+  @@index([status])
+  @@map("purchase_orders")
+}
+
+model Grn {
+  id                String    @id
+  grnNumber         String?
+  purchaseOrder     String?
+  vendor            String?
+  items             Json?
+  receivedBy        String?
+  date              DateTime?
+  deliveryChallanNo String?
+  inspectionStatus  String?
+  remarks           String?
+  documents         Json?
+  createdBy         String?
+  createdAt         DateTime?
+  updatedAt         DateTime?
+
+  @@index([purchaseOrder])
+  @@index([vendor])
+  @@map("grns")
+}
+
+model InventoryItem {
+  id            String    @id
+  sku           String?
+  name          String
+  category      String?
+  unit          String?
+  quantity      Decimal?  @db.Decimal(14, 2)
+  currentStock  Decimal?  @db.Decimal(14, 2)
+  reorderLevel  Decimal?  @db.Decimal(14, 2)
+  minLevel      Decimal?  @db.Decimal(14, 2)
+  status        String?
+  createdAt     DateTime?
+  updatedAt     DateTime?
+
+  @@index([sku])
+  @@index([category])
+  @@map("inventory_items")
+}
+
+model StockTransaction {
+  id          String    @id
+  item        String
+  type        String?
+  quantity    Decimal   @db.Decimal(14, 2)
+  reference   String?
+  remarks     String?
+  balanceAfter Decimal? @db.Decimal(14, 2)
+  createdBy   String?
+  createdAt   DateTime?
+  updatedAt   DateTime?
+
+  @@index([item])
+  @@index([type])
+  @@map("stock_transactions")
+}
+
+model TransferRequest {
+  id               String    @id
+  plot             String
+  fromMember       String?
+  toMember         String?
+  type             String?
+  documents        Json?
+  transferFee      Decimal?  @db.Decimal(14, 2)
+  status           String?
+  duesCleared      Boolean?
+  outstandingDues  Decimal?  @db.Decimal(14, 2)
+  approvalStages   Json?
+  rejectionRemarks String?
+  completedAt      DateTime?
+  createdBy        String?
+  createdAt        DateTime?
+  updatedAt        DateTime?
+
+  @@index([plot])
+  @@index([status])
+  @@map("transfer_requests")
+}
+
+model NocApplication {
+  id                String    @id
+  member            String?
+  plot              String?
+  nocType           String?
+  feeAmount         Decimal?  @db.Decimal(14, 2)
+  documents         Json?
+  status            String?
+  duesCleared       Boolean?
+  outstandingDues   Decimal?  @db.Decimal(14, 2)
+  feePaid           Boolean?
+  feePaidAt         DateTime?
+  issuedNocNumber   String?
+  issuedDate        DateTime?
+  qrVerificationToken String?
+  approvalStages    Json?
+  createdBy         String?
+  createdAt         DateTime?
+  updatedAt         DateTime?
+
+  @@index([member])
+  @@index([plot])
+  @@index([qrVerificationToken])
+  @@map("noc_applications")
+}
+
+model PossessionApplication {
+  id                      String    @id
+  member                  String?
+  plot                    String?
+  possessionCharges       Decimal?  @db.Decimal(14, 2)
+  utilities               Json?
+  status                  String?
+  eligibilityVerified     Boolean?
+  duesVerified            Boolean?
+  siteReadinessVerified   Boolean?
+  chargesPaid             Boolean?
+  chargesPaidAt           DateTime?
+  outstandingDues         Decimal?  @db.Decimal(14, 2)
+  handoverDate            DateTime?
+  possessionLetterUrl     String?
+  approvalStages          Json?
+  createdBy               String?
+  createdAt               DateTime?
+  updatedAt               DateTime?
+
+  @@index([member])
+  @@index([plot])
+  @@map("possession_applications")
+}
+
+model ConstructionApplication {
+  id                       String    @id
+  member                   String?
+  plot                     String?
+  applicationType          String?
+  documents                Json?
+  fees                     Json?
+  status                   String?
+  reviewStatus             String?
+  reviewedBy               String?
+  reviewedAt               DateTime?
+  approvedBy               String?
+  approvedAt               DateTime?
+  rejectionRemarks         String?
+  completionCertificateUrl String?
+  createdBy                String?
+  createdAt                DateTime?
+  updatedAt                DateTime?
+
+  @@index([member])
+  @@index([plot])
+  @@map("construction_applications")
+}
+
+model SiteInspection {
+  id                         String    @id
+  application                String?
+  inspectorUser              String?
+  date                       DateTime?
+  findings                   String?
+  violations                 Json?
+  correctiveActionsRequired  Boolean?
+  reinspectionRequired       Boolean?
+  reinspectionDate           DateTime?
+  createdAt                  DateTime?
+  updatedAt                  DateTime?
+
+  @@index([application])
+  @@map("site_inspections")
+}
+
+model Complaint {
+  id                 String    @id
+  complaintNumber    String?
+  member             String?
+  plot               String?
+  category           String?
+  description        String?
+  location           String?
+  priority           String?
+  attachments        Json?
+  assignedDepartment String?
+  assignedStaff      String?
+  slaDueDate         DateTime?
+  status             String?
+  comments           Json?
+  resolutionNote     String?
+  resolvedAt         DateTime?
+  createdBy          String?
+  createdAt          DateTime?
+  updatedAt          DateTime?
+
+  @@index([member])
+  @@index([status])
+  @@map("complaints")
+}
+
+model Asset {
+  id        String    @id
+  name      String
+  type      String?
+  location  String?
+  block     String?
+  createdBy String?
+  createdAt DateTime?
+  updatedAt DateTime?
+
+  @@map("assets")
+}
+
+model WorkOrder {
+  id                 String    @id
+  asset              String?
+  relatedComplaint   String?
+  description        String?
+  assignedStaff      String?
+  contractor         String?
+  priority           String?
+  expectedCompletion DateTime?
+  materials          Json?
+  laborCost          Decimal?  @db.Decimal(14, 2)
+  materialCost       Decimal?  @db.Decimal(14, 2)
+  status             String?
+  progressLog        Json?
+  completionNote     String?
+  completedAt        DateTime?
+  createdBy          String?
+  createdAt          DateTime?
+  updatedAt          DateTime?
+
+  @@index([asset])
+  @@index([status])
+  @@map("work_orders")
+}
+
+model Employee {
+  id                String    @id
+  employeeId        String?
+  name              String
+  cnic              String?
+  phone             String?
+  email             String?
+  /// Free-text department name. Kept because the API returns it and because
+  /// records can carry a name with no matching departments row (e.g. an
+  /// employee created against a department that is not registered yet).
+  department        String?
+  /// Resolved foreign key to departments. Backfilled from `department` by
+  /// name; NULL when the name does not match a department. Display continues to
+  /// use `department`, so nothing in the API changes.
+  departmentId      String?
+  designation       String?
+  joiningDate       DateTime?
+  dateOfBirth       DateTime?
+  address           String?
+  emergencyContact  Json?
+  linkedUser        String?
+  documents         Json?
+  basicSalary       Decimal?  @db.Decimal(14, 2)
+  allowances        Decimal?  @db.Decimal(14, 2)
+  deductions        Decimal?  @db.Decimal(14, 2)
+  bankAccount       String?
+  /// Per-employee salary component breakdown.
+  salaryStructure   Json?
+  status            String?
+  remarks           String?
+  createdBy         String?
+  createdAt         DateTime?
+  updatedAt         DateTime?
+
+  departmentRef Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+
+  @@index([employeeId])
+  @@index([status])
+  @@index([departmentId])
+  @@map("employees")
+}
+
+model Attendance {
+  id        String    @id
+  employee  String?
+  date      DateTime?
+  status    String?
+  checkIn   DateTime?
+  checkOut  DateTime?
+  remarks   String?
+  createdBy String?
+  createdAt DateTime?
+  updatedAt DateTime?
+
+  @@index([employee])
+  @@index([status])
+  @@map("attendance")
+}
+
+model LeaveRequest {
+  id              String    @id
+  employee        String?
+  type            String?
+  fromDate        DateTime?
+  toDate          DateTime?
+  reason          String?
+  status          String?
+  balanceSnapshot Json?
+  approvedBy      String?
+  approvedAt      DateTime?
+  rejectionReason String?
+  createdBy       String?
+  createdAt       DateTime?
+  updatedAt       DateTime?
+
+  @@index([employee])
+  @@index([status])
+  @@map("leave_requests")
+}
+
+model Guard {
+  id        String    @id
+  user      String?
+  name      String
+  phone     String?
+  supervisor String?
+  shift     String?
+  status    String?
+  createdBy String?
+  createdAt DateTime?
+  updatedAt DateTime?
+
+  @@index([user])
+  @@index([status])
+  @@map("guards")
+}
+
+model DutyRoster {
+  id               String    @id
+  guard            String?
+  date             DateTime?
+  shift            String?
+  attendanceStatus String?
+  createdBy        String?
+  createdAt        DateTime?
+  updatedAt        DateTime?
+
+  @@index([guard])
+  @@index([date])
+  @@map("duty_roster")
+}
+
+model Vehicle {
+  id              String    @id
+  owner           String?
+  number          String?
+  type            String?
+  model           String?
+  stickerNumber   String?
+  stickerIssuedAt DateTime?
+  status          String?
+  createdBy       String?
+  createdAt       DateTime?
+  updatedAt       DateTime?
+
+  @@index([number])
+  @@index([status])
+  @@map("vehicles")
+}
+
+model Pass {
+  id            String    @id
+  passNumber    String?
+  type          String?
+  holderName    String?
+  phone         String?
+  cnic          String?
+  validFrom     DateTime?
+  validTo       DateTime?
+  relatedMember String?
+  status        String?
+  purpose       String?
+  notes         String?
+  createdBy     String?
+  createdAt     DateTime?
+  updatedAt     DateTime?
+
+  @@index([passNumber])
+  @@index([cnic])
+  @@index([status])
+  @@map("passes")
+}
+
+model BlacklistEntry {
+  id            String    @id
+  name          String?
+  cnic          String?
+  phone         String?
+  vehicleNumber String?
+  reason        String?
+  action        String?
+  status        String?
+  addedBy       String?
+  createdAt     DateTime?
+  updatedAt     DateTime?
+
+  @@index([cnic])
+  @@index([vehicleNumber])
+  @@map("blacklist_entries")
+}
+
+model VisitorEntry {
+  id            String    @id
+  visitorName   String
+  phone         String?
+  cnic          String?
+  hostMember    String?
+  purpose       String?
+  gate          String?
+  vehicleNumber String?
+  entryTime     DateTime?
+  exitTime      DateTime?
+  exitMarkedBy  String?
+  remarks       String?
+  passId        String?
+  createdBy     String?
+  createdAt     DateTime?
+  updatedAt     DateTime?
+
+  @@index([hostMember])
+  @@index([entryTime])
+  @@map("visitor_entries")
+}
+
+model Notice {
+  id              String    @id
+  title           String
+  body            String?
+  targetAudience  String?
+  targetRoleIds   Json?
+  targetMemberIds Json?
+  publishDate     DateTime?
+  expiryDate      DateTime?
+  status          String?
+  publishedAt     DateTime?
+  createdBy       String?
+  createdAt       DateTime?
+  updatedAt       DateTime?
+
+  @@map("notices")
+}
+
+model Notification {
+  id               String    @id
+  user             String?
+  title            String
+  message          String?
+  relatedEntityType String?
+  relatedEntityId  String?
+  eventType        String?
+  eventKey         String?
+  metadata         Json?
+  isRead           Boolean?
+  readAt           DateTime?
+  createdBy        String?
+  createdAt        DateTime?
+  updatedAt        DateTime?
+
+  @@index([user])
+  @@map("notifications")
+}
+
+model Document {
+  id                 String    @id
+  relatedEntityType  String?
+  relatedEntityId    String?
+  type               String?
+  number             String?
+  issueDate          DateTime?
+  expiryDate         DateTime?
+  fileUrl            String?
+  fileName           String?
+  storageKey         String?
+  storageBucket      String?
+  storagePath        String?
+  mimeType           String?
+  size               Int?
+  verificationStatus String?
+  version            Int?
+  isSuperseded       Boolean?
+  supersededBy       String?
+  uploadedBy         String?
+  createdAt          DateTime?
+  updatedAt          DateTime?
+
+  @@index([relatedEntityType, relatedEntityId])
+  @@map("documents")
+}
+
+model Invoice {
+  id                 String    @id
+  invoiceNumber      String?
+  invoiceType        String?
+  relatedEntityType  String?
+  relatedEntityId    String?
+  sourceKey          String?
+  member             String?
+  dealer             String?
+  plot               String?
+  amount             Decimal?  @db.Decimal(14, 2)
+  issueDate          DateTime?
+  fileUrl            String?
+  storageBucket      String?
+  storagePath        String?
+  status             String?
+  createdBy          String?
+  cancelledAt        DateTime?
+  cancelledBy        String?
+  createdAt          DateTime?
+  updatedAt          DateTime?
+
+  @@index([invoiceType])
+  @@index([storageBucket])
+  @@map("invoices")
+}
+
+model RecoveryAssignment {
+  id              String    @id
+  booking         String?
+  agent           String?
+  assignedBy      String?
+  assignedDate    DateTime?
+  status          String?
+  recoveryPercent Decimal?  @db.Decimal(5, 2)
+  createdAt       DateTime?
+  updatedAt       DateTime?
+
+  @@index([booking])
+  @@index([agent])
+  @@map("recovery_assignments")
+}
+
+model RecoveryCall {
+  id                String    @id
+  assignment        String?
+  calledBy          String?
+  callDate          DateTime?
+  notes             String?
+  commitmentDate    DateTime?
+  commitmentAmount  Decimal?  @db.Decimal(14, 2)
+  outcome           String?
+  createdAt         DateTime?
+  updatedAt         DateTime?
+
+  @@index([assignment])
+  @@map("recovery_calls")
+}
+
+model HrSetup {
+  id              String    @id
+  salaryComponents Json?
+  statutoryConfig Json?
+  taxSlabs        Json?
+  updatedBy       String?
+  createdAt       DateTime?
+  updatedAt       DateTime?
+
+  @@map("hr_setups")
+}
+
+model Loan {
+  id                 String    @id
+  employee           String?
+  amount             Decimal?  @db.Decimal(14, 2)
+  installmentAmount  Decimal?  @db.Decimal(14, 2)
+  remainingBalance   Decimal?  @db.Decimal(14, 2)
+  status             String?
+  disbursedDate      DateTime?
+  lastDeductionRun   String?
+  lastDeductionAt    DateTime?
+  createdBy          String?
+  createdAt          DateTime?
+  updatedAt          DateTime?
+
+  @@index([employee])
+  @@index([status])
+  @@map("loans")
+}
+
+model PayrollRun {
+  id              String    @id
+  month           Int
+  year            Int
+  status          String?
+  generatedBy     String?
+  approvedBy      String?
+  paidBy          String?
+  approvedAt      DateTime?
+  paidAt          DateTime?
+  journalEntryId  String?
+  entries         Json?
+  totals          Json?
+  glPosting       Json?
+  createdAt       DateTime?
+  updatedAt       DateTime?
+
+  @@unique([year, month])
+  @@map("payroll_runs")
+}
+
+model JournalEntry {
+  id          String    @id
+  date        DateTime?
+  sourceType  String?
+  sourceId    String?
+  description String?
+  lines       Json?
+  totalDebit  Decimal?  @db.Decimal(14, 2)
+  totalCredit Decimal?  @db.Decimal(14, 2)
+  status      String?
+  postedBy    String?
+  createdAt   DateTime?
+  updatedAt   DateTime?
+
+  @@index([status])
+  @@map("journal_entries")
+}
+
+model Appointment {
+  id           String    @id
+  visitorName  String
+  purpose      String?
+  hostEmployee String?
+  tokenNumber  String?
+  status       String?
+  checkInTime  DateTime?
+  checkOutTime DateTime?
+  createdBy    String?
+  createdAt    DateTime?
+  updatedAt    DateTime?
+
+  @@map("appointments")
+}
+
+model RegistryBatch {
+  id             String    @id
+  plots          Json?
+  requestDate    DateTime?
+  status         String?
+  completedDate  DateTime?
+  remarks        String?
+  completedBy    String?
+  createdBy      String?
+  createdAt      DateTime?
+  updatedAt      DateTime?
+
+  @@index([status])
+  @@map("registry_batches")
+}
+
+model PlotMerge {
+  id               String    @id
+  mergedPlots      Json?
+  resultingPlot    String?
+  adjustedAmounts  Json?
+  performedBy      String?
+  date             DateTime?
+  status           String?
+  invoiceId        String?
+  invoiceUrl       String?
+  createdAt        DateTime?
+  updatedAt        DateTime?
+
+  @@index([resultingPlot])
+  @@map("plot_merges")
+}
+
+model Buyback {
+  id               String    @id
+  plot             String?
+  booking          String?
+  type             String?
+  paymentType      String?
+  deductionPercent Decimal?  @db.Decimal(5, 2)
+  settlementAmount Decimal?  @db.Decimal(14, 2)
+  performedBy      String?
+  date             DateTime?
+  status           String?
+  invoiceId        String?
+  invoiceUrl       String?
+  createdBy        String?
+  createdAt        DateTime?
+  updatedAt        DateTime?
+
+  @@index([plot])
+  @@index([booking])
+  @@map("buybacks")
+}

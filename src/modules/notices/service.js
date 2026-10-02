@@ -37,7 +37,7 @@ class NoticeService {
       const users = await User.find({ isActive: true });
       const ids = [];
       for (const user of users) {
-        const roleIds = (user.roles || []).map((role) => (typeof role === "object" ? role._id : role));
+        const roleIds = (user.roles || []).map((role) => (typeof role === "object" ? role.id || role._id : role));
         if (notice.targetRoleIds.some((roleId) => roleIds.includes(roleId))) ids.push(user._id);
       }
       return ids;
@@ -99,7 +99,7 @@ class NoticeService {
     const now = new Date();
     const all = await Notice.find({}, { sort: { publishDate: -1 } });
     const canManage = await RbacService.isAllowed(user, "notices", "edit");
-    const userRoleIds = (user.roles || []).map((role) => (typeof role === "object" ? role._id : role));
+    const userRoleIds = (user.roles || []).map((role) => (typeof role === "object" ? role.id || role._id : role));
     const specificAudienceIds = new Map();
     for (const notice of all.filter((item) => item.targetAudience === "Specific members")) {
       specificAudienceIds.set(notice._id, await this.audienceUserIds(notice));

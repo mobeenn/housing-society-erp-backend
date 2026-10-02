@@ -13,6 +13,10 @@ class MasterData {
     return await db.collection(this.collectionName).find(query, options);
   }
 
+  async findOne(query = {}) {
+    return await db.collection(this.collectionName).findOne(query);
+  }
+
   async findById(id) {
     return await db.collection(this.collectionName).findOne({ _id: id });
   }

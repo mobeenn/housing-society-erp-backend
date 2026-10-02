@@ -1,5 +1,6 @@
 const { db } = require("../../config/db");
 const { v4: uuidv4 } = require("uuid");
+const { Department } = require("../administration/masterData.model");
 
 const collectionName = "employees";
 
@@ -27,6 +28,22 @@ class Employee {
     return db.collection(collectionName).findOne({ _id: id });
   }
 
+  /**
+   * Map a department name to its id, case-insensitively.
+   * Returns null when the department is not registered — an unregistered name
+   * must not block employee creation.
+   */
+  static async resolveDepartmentId(name) {
+    const trimmed = String(name || "").trim();
+    if (!trimmed) return null;
+    const match = await Department.findOne({ name: trimmed });
+    if (match) return match._id;
+    const insensitive = (await Department.find({})).find(
+      (d) => String(d.name || "").trim().toLowerCase() === trimmed.toLowerCase()
+    );
+    return insensitive?._id || null;
+  }
+
   static async create(data, createdBy) {
     const employee = {
       _id: uuidv4(),
@@ -36,6 +53,10 @@ class Employee {
       phone: data.phone || null,
       email: data.email || null,
       department: data.department,
+      // Resolve the free-text department name to a real departments row so the
+      // employee is joinable. Left NULL when the name is not registered; the
+      // API still displays `department`, so nothing changes for the caller.
+      departmentId: await Employee.resolveDepartmentId(data.department),
       designation: data.designation,
       joiningDate: data.joiningDate,
       dateOfBirth: data.dateOfBirth || null,

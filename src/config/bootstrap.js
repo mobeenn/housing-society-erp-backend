@@ -1,27 +1,24 @@
 const { connectDB, db } = require("./db");
-const { seed: seedRolesAndSuperAdmin } = require("../seeds/seedRolesAndSuperAdmin");
-const { seed: seedAdministration } = require("../seeds/seedAdministration");
-const { seedRbac } = require("../seeds/seedRbacModules");
-const { seedRecoveryAccess } = require("../seeds/seedRecoveryAccess");
-const { seedHrPayrollAccess } = require("../seeds/seedHrPayrollAccess");
-const { seedPhase15Access } = require("../seeds/seedPhase15Access");
+
+/**
+ * Serverless cold-start data readiness (Vercel).
+ *
+ * Uses the Prisma seed so the Postgres tables always contain the base rows.
+ * The legacy fileDB seeders are no longer invoked: they wrote to data/db.json
+ * and one of them would fall back to a hardcoded Super Admin password.
+ */
 
 let readinessPromise = null;
 
 async function initializePersistentData() {
   await connectDB();
 
-  // Every seeder is idempotent. Existing imported data is preserved; only
-  // missing base roles, settings, and RBAC records are created.
-  await seedRolesAndSuperAdmin();
-  await seedAdministration();
-  await seedRbac();
-  await seedRecoveryAccess();
-  await seedHrPayrollAccess();
-  await seedPhase15Access();
-  await db.save();
+  // Idempotent upserts: existing imported data is preserved, only missing base
+  // rows (modules, roles, numbering rules, settings, Super Admin) are created.
+  const { run } = require("../../prisma/seed");
+  await run();
 
-  console.log(`✅ Persistent application data ready (${db.storageMode}).`);
+  console.log(`Persistent application data ready (${db.storageMode}).`);
 }
 
 function ensureDatabaseReady() {

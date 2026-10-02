@@ -1,8 +1,8 @@
 const bcrypt = require("bcryptjs");
-const User = require("./model");
-const Role = require("../roles/model");
+const { prisma } = require("../../config/prisma");
 const ApiError = require("../../utils/ApiError");
 const { createAuditLog } = require("../administration/auditLog.model");
+const { USER_SORT_FIELDS } = require("./validation");
 
 class UserService {
   /**
@@ -10,59 +10,71 @@ class UserService {
    */
   static async getAll(queryParams = {}) {
     const {
-      page = 1,
-      limit = 20,
       search = "",
-      sortBy = "createdAt",
-      sortOrder = "desc",
       isActive,
       roleId,
     } = queryParams;
 
+    // Query params reach this service as strings. Prisma requires real integers
+    // for skip/take, so normalise here as well as in the route validator —
+    // this method must not depend on a middleware having run first.
+    const page = Number.parseInt(queryParams.page, 10) || 1;
+    const limit = Math.min(Math.max(Number.parseInt(queryParams.limit, 10) || 20, 1), 100);
+    const sortBy = USER_SORT_FIELDS.includes(queryParams.sortBy) ? queryParams.sortBy : "createdAt";
+    const sortOrder = queryParams.sortOrder === "asc" ? "asc" : "desc";
+
     const skip = (page - 1) * limit;
 
-    // Build query
-    const query = {};
+    // Build where clause
+    const where = {};
 
     // Search by name or email
     if (search) {
-      const searchRegex = new RegExp(search, "i");
-      query.$or = [
-        { name: { $regex: searchRegex } },
-        { email: { $regex: searchRegex } },
+      where.OR = [
+        { name: { contains: search, mode: "insensitive" } },
+        { email: { contains: search, mode: "insensitive" } },
       ];
     }
 
     // Filter by active status
     if (isActive !== undefined) {
-      query.isActive = isActive === "true" || isActive === true;
+      where.isActive = isActive === "true" || isActive === true;
     }
 
     // Filter by role
     if (roleId) {
-      query.roleId = roleId;
+      where.userRoles = { some: { roleId } };
     }
 
-    // Build sort option
-    const sort = {};
-    sort[sortBy] = sortOrder === "asc" ? 1 : -1;
+    // Build orderBy
+    const orderBy = {};
+    orderBy[sortBy] = sortOrder === "asc" ? "asc" : "desc";
 
     // Fetch users with pagination
-    const users = await User.find(query, { sort, skip, limit });
+    const users = await prisma.user.findMany({
+      where,
+      include: {
+        userRoles: { include: { role: true } },
+        createdBy: { select: { id: true, name: true, email: true } },
+      },
+      orderBy,
+      skip,
+      take: limit,
+    });
 
-    // Populate role for each user
-    for (const user of users) {
-      await User.populateRole(user);
-      delete user.passwordHash; // Never return password hash
-    }
+    const total = await prisma.user.count({ where });
 
-    const total = await User.countDocuments(query);
+    // Remove passwordHash from each user
+    const sanitizedUsers = users.map((user) => {
+      const { passwordHash, ...rest } = user;
+      return rest;
+    });
 
     return {
-      users,
+      users: sanitizedUsers,
       pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
+        page,
+        limit,
         total,
         pages: Math.ceil(total / limit),
       },
@@ -73,17 +85,21 @@ class UserService {
    * Get user by ID.
    */
   static async getById(id) {
-    const user = await User.findById(id);
+    const user = await prisma.user.findUnique({
+      where: { id },
+      include: {
+        userRoles: { include: { role: true } },
+        createdBy: { select: { id: true, name: true, email: true } },
+      },
+    });
 
     if (!user) {
       throw new ApiError(404, "User not found");
     }
 
-    await User.populateRole(user);
-    await User.populateCreatedBy(user);
-    delete user.passwordHash;
-
-    return user;
+    // Remove passwordHash
+    const { passwordHash, ...sanitizedUser } = user;
+    return sanitizedUser;
   }
 
   /**
@@ -93,46 +109,62 @@ class UserService {
     const { name, email, phone, password, roleId, mustResetPassword } = userData;
 
     // Check if email already exists
-    const existing = await User.findOne({ email: email.toLowerCase() });
+    const existing = await prisma.user.findUnique({
+      where: { email: email.toLowerCase() },
+    });
     if (existing) {
       throw new ApiError(409, "Email already in use");
     }
 
     // Validate role exists
-    const role = await Role.findById(roleId);
+    const role = await prisma.role.findUnique({
+      where: { id: roleId },
+    });
     if (!role) {
       throw new ApiError(400, "Invalid role");
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
 
-    const user = await User.create({
-      name,
-      email: email.toLowerCase(),
-      phone,
-      passwordHash,
-      roleId,
-      mustResetPassword: mustResetPassword || false,
-      createdBy: createdByUserId,
+    const user = await prisma.user.create({
+      data: {
+        name,
+        email: email.toLowerCase(),
+        phone,
+        passwordHash,
+        mustResetPassword: mustResetPassword || false,
+        createdById: createdByUserId,
+        userRoles: {
+          create: { roleId },
+        },
+      },
+      include: {
+        userRoles: { include: { role: true } },
+        createdBy: { select: { id: true, name: true, email: true } },
+      },
     });
 
     // Audit log
     await createAuditLog({
       req,
       entityType: "user",
-      entityId: user._id,
+      entityId: user.id,
       action: "create",
       changes: { after: { name, email, roleId, isActive: user.isActive } },
     });
 
-    return this.getById(user._id);
+    // Remove passwordHash
+    const { passwordHash: _, ...sanitizedUser } = user;
+    return sanitizedUser;
   }
 
   /**
    * Update user by ID.
    */
   static async update(id, updateData, req) {
-    const user = await User.findById(id);
+    const user = await prisma.user.findUnique({
+      where: { id },
+    });
     if (!user) {
       throw new ApiError(404, "User not found");
     }
@@ -141,15 +173,33 @@ class UserService {
 
     // Validate role if provided
     if (updateData.roleId) {
-      const role = await Role.findById(updateData.roleId);
+      const role = await prisma.role.findUnique({
+        where: { id: updateData.roleId },
+      });
       if (!role) {
         throw new ApiError(400, "Invalid role");
       }
-      dataToUpdate.roles = [updateData.roleId];
     }
 
     const before = await this.getById(id);
-    await User.update(id, dataToUpdate);
+
+    // Handle role update separately
+    if (updateData.roleId) {
+      await prisma.userRole.deleteMany({ where: { userId: id } });
+      await prisma.userRole.create({
+        data: { userId: id, roleId: updateData.roleId },
+      });
+      delete dataToUpdate.roleId;
+    }
+
+    const updatedUser = await prisma.user.update({
+      where: { id },
+      data: dataToUpdate,
+      include: {
+        userRoles: { include: { role: true } },
+        createdBy: { select: { id: true, name: true, email: true } },
+      },
+    });
 
     const after = await this.getById(id);
 
@@ -162,20 +212,32 @@ class UserService {
       changes: { before, after },
     });
 
-    return after;
+    // Remove passwordHash
+    const { passwordHash, ...sanitizedUser } = updatedUser;
+    return sanitizedUser;
   }
 
   /**
    * Soft delete user by setting isActive to false.
    */
   static async deactivate(id, req) {
-    const user = await User.findById(id);
+    const user = await prisma.user.findUnique({
+      where: { id },
+    });
     if (!user) {
       throw new ApiError(404, "User not found");
     }
 
     const before = await this.getById(id);
-    await User.update(id, { isActive: false });
+
+    const updatedUser = await prisma.user.update({
+      where: { id },
+      data: { isActive: false },
+      include: {
+        userRoles: { include: { role: true } },
+        createdBy: { select: { id: true, name: true, email: true } },
+      },
+    });
 
     // Audit log
     await createAuditLog({
@@ -186,20 +248,32 @@ class UserService {
       changes: { before, after: { ...before, isActive: false } },
     });
 
-    return this.getById(id);
+    // Remove passwordHash
+    const { passwordHash, ...sanitizedUser } = updatedUser;
+    return sanitizedUser;
   }
 
   /**
    * Toggle user active status.
    */
   static async toggleActive(id, req) {
-    const user = await User.findById(id);
+    const user = await prisma.user.findUnique({
+      where: { id },
+    });
     if (!user) {
       throw new ApiError(404, "User not found");
     }
 
     const before = await this.getById(id);
-    await User.update(id, { isActive: !user.isActive });
+
+    const updatedUser = await prisma.user.update({
+      where: { id },
+      data: { isActive: !user.isActive },
+      include: {
+        userRoles: { include: { role: true } },
+        createdBy: { select: { id: true, name: true, email: true } },
+      },
+    });
 
     const after = await this.getById(id);
 
@@ -212,19 +286,26 @@ class UserService {
       changes: { before, after },
     });
 
-    return after;
+    // Remove passwordHash
+    const { passwordHash, ...sanitizedUser } = updatedUser;
+    return sanitizedUser;
   }
 
   /**
    * Trigger password reset (sets mustResetPassword flag).
    */
   static async triggerPasswordReset(id, req) {
-    const user = await User.findById(id);
+    const user = await prisma.user.findUnique({
+      where: { id },
+    });
     if (!user) {
       throw new ApiError(404, "User not found");
     }
 
-    await User.update(id, { mustResetPassword: true });
+    await prisma.user.update({
+      where: { id },
+      data: { mustResetPassword: true },
+    });
 
     // Audit log
     await createAuditLog({
