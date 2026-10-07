@@ -1,7 +1,7 @@
 {
   "name": "housing-society-erp-backend",
   "version": "1.0.0",
-  "description": "Housing Society Management ERP — REST API backend",
+  "description": "Civica — REST API backend",
   "main": "src/server.js",
   "scripts": {
     "dev": "nodemon src/server.js",

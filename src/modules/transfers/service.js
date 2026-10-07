@@ -1,4 +1,6 @@
 const PDFDocument = require("pdfkit");
+const { drawCivicaLogo } = require("../../utils/civicaBrand");
+const { db } = require("../../config/db");
 const TransferRequest = require("./transfer.model");
 const { Plot, OwnershipHistory } = require("../properties/plot.model");
 const { Installment } = require("../bookings/booking.model");
@@ -20,7 +22,18 @@ class TransferService {
   }
 
   static async getById(id) { const transfer = await TransferRequest.findById(id); if (!transfer) throw new ApiError(404, "Transfer request not found"); const [plot, fromMember, toMember] = await Promise.all([Plot.findById(transfer.plot), Member.findById(transfer.fromMember), Member.findById(transfer.toMember)]); return { ...transfer, plotRef: plot, fromMemberRef: fromMember, toMemberRef: toMember }; }
-  static async list({ status, page = 1, limit = 20 }) { const query = status ? { status } : {}; const all = await TransferRequest.find(query, { sort: { createdAt: -1 } }); const p = Number(page) || 1; const l = Number(limit) || 20; const data = await Promise.all(all.slice((p - 1) * l, p * l).map((item) => this.getById(item._id))); return { data, pagination: { page: p, limit: l, total: all.length, pages: Math.ceil(all.length / l) } }; }
+  static async list({ status, page = 1, limit = 20 }) {
+    const query = status ? { status } : {};
+    const p = Math.max(1, Number(page) || 1);
+    const l = Math.max(1, Number(limit) || 20);
+    const skip = (p - 1) * l;
+    const [rows, total] = await Promise.all([
+      TransferRequest.find(query, { skip, limit: l, sort: { createdAt: -1 } }),
+      db.collection(TransferRequest.collectionName).countDocuments(query),
+    ]);
+    const data = await Promise.all(rows.map((item) => this.getById(item._id)));
+    return { data, pagination: { page: p, limit: l, total, pages: Math.ceil(total / l) } };
+  }
 
   static async verify(id, req) {
     const transfer = await TransferRequest.findById(id); if (!transfer) throw new ApiError(404, "Transfer request not found"); if (![TransferRequest.STATUS.DRAFT, TransferRequest.STATUS.PENDING_VERIFICATION].includes(transfer.status)) throw new ApiError(409, "Transfer is not ready for verification");
@@ -44,6 +57,6 @@ class TransferService {
     await Plot.update(plot._id, { currentOwner: transfer.toMember, ownerSince: now, status: Plot.STATUS.TRANSFERRED }); await TransferRequest.update(id, { status: TransferRequest.STATUS.COMPLETED, completedAt: now }); await createAuditLog({ req, entityType: "TransferRequest", entityId: id, action: AuditLog.ACTIONS.UPDATE, changes: { before: transfer, after: { status: TransferRequest.STATUS.COMPLETED, plot: plot._id, fromMember: transfer.fromMember, toMember: transfer.toMember } } }); await NotificationService.safeNotifyMembers([transfer.fromMember, transfer.toMember], { title: "Transfer completed", message: `Ownership of plot ${plot.plotNumber} has been transferred.`, relatedEntityType: "TransferRequest", relatedEntityId: id, eventType: "transfer.completed", eventKey: `transfer-completed:${id}` }); const completed = await this.getById(id); await InvoiceService.safeRegisterInvoice("Transfer", completed, { fileUrl: `/api/transfers/${id}/certificate.pdf`, createdBy: req.user._id }); return completed;
   }
 
-  static async certificate(id) { const transfer = await this.getById(id); if (transfer.status !== TransferRequest.STATUS.COMPLETED) throw new ApiError(409, "Transfer certificate is available after completion"); return new Promise((resolve) => { const chunks = []; const pdf = new PDFDocument({ margin: 50 }); pdf.on("data", (chunk) => chunks.push(chunk)); pdf.on("end", () => resolve({ transfer, buffer: Buffer.concat(chunks) })); pdf.fontSize(20).text("Housing Society Transfer Certificate", { align: "center" }).moveDown().fontSize(12).text(`Transfer ID: ${transfer._id}`).text(`Plot: ${transfer.plotRef?.plotNumber || transfer.plot}`).text(`From: ${transfer.fromMemberRef?.name || transfer.fromMember}`).text(`To: ${transfer.toMemberRef?.name || transfer.toMember}`).text(`Type: ${transfer.type}`).text(`Completed: ${new Date(transfer.completedAt).toLocaleString()}`).end(); }); }
+  static async certificate(id) { const transfer = await this.getById(id); if (transfer.status !== TransferRequest.STATUS.COMPLETED) throw new ApiError(409, "Transfer certificate is available after completion"); return new Promise((resolve) => { const chunks = []; const pdf = new PDFDocument({ margin: 50 }); pdf.on("data", (chunk) => chunks.push(chunk)); pdf.on("end", () => resolve({ transfer, buffer: Buffer.concat(chunks) })); drawCivicaLogo(pdf, { x: 50, y: 40, width: 110 }); pdf.fontSize(18).text("Transfer Certificate", { align: "center" }).moveDown().fontSize(12).text(`Transfer ID: ${transfer._id}`).text(`Plot: ${transfer.plotRef?.plotNumber || transfer.plot}`).text(`From: ${transfer.fromMemberRef?.name || transfer.fromMember}`).text(`To: ${transfer.toMemberRef?.name || transfer.toMember}`).text(`Type: ${transfer.type}`).text(`Completed: ${new Date(transfer.completedAt).toLocaleString()}`).end(); }); }
 }
 module.exports = TransferService;

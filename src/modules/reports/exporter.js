@@ -1,5 +1,6 @@
 const PDFDocument = require("pdfkit");
 const ExcelJS = require("exceljs");
+const { drawCivicaLogo } = require("../../utils/civicaBrand");
 
 const rowsForReport = (report) => report.data || [];
 
@@ -10,6 +11,6 @@ const createWorkbook = async (report) => {
   return workbook.xlsx.writeBuffer();
 };
 
-const createPdf = (report) => new Promise((resolve) => { const chunks = []; const pdf = new PDFDocument({ margin: 40 }); pdf.on("data", (chunk) => chunks.push(chunk)); pdf.on("end", () => resolve(Buffer.concat(chunks))); pdf.fontSize(18).text(`Finance Report: ${report.report}`).moveDown().fontSize(9).text(`Range: ${report.range.start} to ${report.range.end}`).moveDown(); rowsForReport(report).forEach((row) => pdf.text(Object.entries(row).map(([key, value]) => `${key}: ${typeof value === "object" ? JSON.stringify(value) : value}`).join(" | "))); pdf.end(); });
+const createPdf = (report) => new Promise((resolve) => { const chunks = []; const pdf = new PDFDocument({ margin: 40 }); pdf.on("data", (chunk) => chunks.push(chunk)); pdf.on("end", () => resolve(Buffer.concat(chunks))); drawCivicaLogo(pdf, { x: 40, y: 32, width: 100 }); pdf.fontSize(18).text(`Finance Report: ${report.report}`).moveDown().fontSize(9).text(`Range: ${report.range.start} to ${report.range.end}`).moveDown(); rowsForReport(report).forEach((row) => pdf.text(Object.entries(row).map(([key, value]) => `${key}: ${typeof value === "object" ? JSON.stringify(value) : value}`).join(" | "))); pdf.end(); });
 
 module.exports = { createWorkbook, createPdf };

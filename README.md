@@ -1,87 +1,105 @@
-# Housing Society Management ERP — Backend
+# Civica — Backend
 
-Production-grade Node.js + Express.js REST API for the Housing Society
-Management ERP system.
+Node.js + Express REST API for Civica.
 
-## Tech Stack
+## Tech stack
 
-- **Runtime** — Node.js ≥ 18
+- **Runtime** — Node.js `^20.19 || ^22.12 || >=24`
 - **Framework** — Express.js
-- **Database** — MongoDB (via Mongoose)
-- **Auth** — JWT (access + refresh tokens), bcryptjs
+- **Database** — PostgreSQL via **Prisma 7** (`@prisma/adapter-pg`, typically Supabase)
+- **Auth** — JWT (access + httpOnly refresh), bcryptjs
 - **Validation** — Zod
 - **Security** — helmet, cors, express-rate-limit
+- **Documents** — multer; local disk and/or Vercel Blob / Supabase Storage
+- **PDFs / Excel** — pdfkit, exceljs, qrcode
 
-## Folder Structure
+Runtime persistence is confirmed by `GET /api/health` → `persistence: "postgresql-prisma"`.  
+`data/db.json` is **not** used at runtime; it is only a source for `npm run db:import:legacy`.
+
+Domain services still speak a Mongo-like API (`find`, `_id`) through [`src/db/prismaCollection.js`](src/db/prismaCollection.js).
+
+## Folder structure
 
 ```
 backend/
+├── api/index.js              # Vercel Express entry
+├── prisma/                   # schema.prisma, migrations, seed
+├── scripts/                  # import/verify/helpers
 ├── src/
-│   ├── config/
-│   │   ├── db.js            # MongoDB connection
-│   │   └── env.js           # Centralised env-var access
-│   ├── middlewares/
-│   │   ├── auth.js          # JWT bearer-token guard
-│   │   ├── errorHandler.js  # Global error-response formatter
-│   │   ├── notFound.js      # 404 catch-all
-│   │   └── validate.js      # Zod validation middleware factory
-│   ├── modules/             # Feature modules (routes + controller + service + model)
+│   ├── config/               # env, prisma, supabase, permissions
+│   ├── db/                   # prismaCollection adapter
+│   ├── middlewares/          # auth, validate, errorHandler, notFound
+│   ├── modules/              # feature modules (routes/controller/service/model)
+│   ├── seeds/
+│   ├── services/             # notification channel stubs, etc.
 │   ├── utils/
-│   │   ├── ApiError.js      # Custom error class with status code
-│   │   ├── apiResponse.js   # Standard { success, message, data/errors } helpers
-│   │   └── asyncHandler.js  # Async route wrapper (belt-and-suspenders)
-│   ├── app.js               # Express app configuration
-│   └── server.js            # Entry point — connects DB, starts server
-├── .env.example             # Required env vars (copy to .env)
-├── .gitignore
-├── package.json
-└── README.md
+│   ├── app.js
+│   └── server.js
+├── data/db.json              # legacy import source only
+├── uploads/                  # local document files
+├── .env.example
+└── package.json
 ```
 
-## Getting Started
+## Getting started
 
-1. **Install dependencies**
+1. **Install**
 
    ```bash
    cd backend
    npm install
    ```
 
-2. **Configure environment**
+2. **Configure**
 
    ```bash
    cp .env.example .env
-   # Edit .env with your MongoDB URI and secrets
    ```
 
-3. **Start MongoDB** — make sure a local (or Atlas) MongoDB instance is
-   reachable at the `MONGO_URI` in your `.env`.
+   Required: `DATABASE_URL`, `DIRECT_URL`, JWT secrets, `CORS_ORIGIN`, seed super-admin credentials.  
+   Optional: Supabase URL/keys and storage bucket names (see `.env.example`).
 
-4. **Run the dev server**
+3. **Migrate**
+
+   ```bash
+   npm run prisma:deploy
+   # local iterative: npm run prisma:migrate
+   ```
+
+4. **Seed**
+
+   ```bash
+   npm run seed
+   ```
+
+5. **Run**
 
    ```bash
    npm run dev
    ```
 
-5. **Verify**
+6. **Verify**
 
    ```bash
    curl http://localhost:5000/api/health
-   # → { "success": true, "message": "OK" }
+   # → { "success": true, "data": { "persistence": "postgresql-prisma", "database": "up", ... } }
    ```
 
-## NPM Scripts
+## NPM scripts (selected)
 
-| Script         | Description                       |
-| -------------- | --------------------------------- |
-| `npm run dev`  | Start with nodemon (auto-reload)  |
-| `npm start`    | Start without nodemon             |
-| `npm run lint` | Run ESLint                        |
-| `npm run format` | Run Prettier                    |
+| Script | Description |
+|--------|-------------|
+| `npm run dev` | Nodemon API server |
+| `npm start` | Production Node server |
+| `npm run seed` | Roles, admin, numbering, RBAC, recovery, HR payroll, phase15 |
+| `npm run seed:development` | Full demo chain + invoice backfill |
+| `npm run prisma:generate` | Generate Prisma client |
+| `npm run prisma:migrate` | Dev migrations |
+| `npm run prisma:deploy` | Apply migrations |
+| `npm run db:import:legacy` | Import `data/db.json` → Postgres |
+| `npm run storage:import` | Import local uploads to Blob (when configured) |
 
-## API Response Format
-
-All endpoints follow a consistent envelope:
+## API response format
 
 ```jsonc
 // Success
@@ -91,41 +109,40 @@ All endpoints follow a consistent envelope:
 { "success": false, "message": "…", "errors": [] }
 ```
 
-## Vercel Persistent Deployment
+## Auth and authorization
 
-The live frontend is hosted at:
+- Bearer **access JWT**; **refresh** via httpOnly cookie `refreshToken` (and/or body)
+- Routes: `authenticate` + `authorize("moduleKey", "action")`
+- Actions: `view|create|edit|delete|approve|reject|cancel|print|export|refund`
+- Super Admin bypasses checks; others use `RoleModuleAccess`
+
+Module mounts live in [`src/app.js`](src/app.js) (`/api/auth`, `/api/members`, `/api/plots`, `/api/payments`, `/api/recovery`, lifecycle routes, HR, security, procurement, …).
+
+## Background jobs
+
+`startRecoveryScheduler()` in `server.js` runs the recovery auto-block check (skipped on Vercel; disable with `RECOVERY_JOB_ENABLED=false`). No Redis/queue workers.
+
+## Vercel deployment
+
+Live frontend origin accepted by default:
 
 - `https://housing-society-erp-frontend.vercel.app`
 
-The backend accepts that origin by default and supports Vercel preview origins.
-For the Vercel project, set:
+Typical production env:
 
 ```bash
 NODE_ENV=production
+DATABASE_URL=<pooled supabase uri>
+DIRECT_URL=<direct uri for migrate/deploy CI>
 CORS_ORIGIN=https://housing-society-erp-frontend.vercel.app
 COOKIE_SECURE=true
 COOKIE_SAME_SITE=none
-DB_BLOB_PATH=housing-society/data/db.json
-DOCUMENTS_BLOB_PREFIX=documents
 JWT_ACCESS_SECRET=<long-random-secret>
 JWT_REFRESH_SECRET=<different-long-random-secret>
 ```
 
-Create a **private** Blob store in Vercel and connect it to the backend project.
-Vercel then supplies the store ID and rotating OIDC credentials automatically.
-The database remains the same JSON structure, and uploaded documents keep their
-existing file-oriented storage contract.
+`vercel.json` routes Express through `api/index.js`. Prefer a **private** Blob store if using Vercel Blob for documents.
 
-To import the current local `data/db.json` and files from `uploads/` into the
-private Blob store, pull the Vercel environment (or set a read-write token) and run:
+## Notifications
 
-```bash
-npm run storage:import
-```
-
-`vercel.json` routes the Express application through `api/index.js`. Every request
-refreshes the JSON file from private Blob before handling business operations, and
-all create/update/delete operations are written back before the API responds.
-
-> Do not use a public Blob store. The database contains password hashes, personal
-> records, RBAC data, and financial records.
+Email, SMS, and WhatsApp implementations under `src/services/notificationChannels/` are intentional **stubs** (`status: "stubbed"`). Overdue recovery reminders use in-app notifications.

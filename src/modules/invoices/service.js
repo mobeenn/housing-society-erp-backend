@@ -215,58 +215,48 @@ class InvoiceService {
     page = 1,
     limit = 20,
   } = {}) {
-    const all = await Invoice.find({}, { sort: { issueDate: -1 } });
-    const normalizedSearch = String(search || "").trim().toLowerCase();
-    const start = startDate ? new Date(startDate).getTime() : null;
-    const end = endDate ? new Date(`${endDate}T23:59:59.999Z`).getTime() : null;
-    let filtered = all.filter((invoice) => {
-      if (invoiceType && invoice.invoiceType !== invoiceType) return false;
-      if (member && invoice.member !== member) return false;
-      if (dealer && invoice.dealer !== dealer) return false;
-      if (plot && invoice.plot !== plot) return false;
-      if (status && invoice.status !== status) return false;
-      const issueTime = new Date(invoice.issueDate).getTime();
-      if (start && issueTime < start) return false;
-      if (end && issueTime > end) return false;
-      return true;
-    });
+    const query = {};
+    if (invoiceType) query.invoiceType = invoiceType;
+    if (member) query.member = member;
+    if (dealer) query.dealer = dealer;
+    if (plot) query.plot = plot;
+    if (status) query.status = status;
+    if (startDate || endDate) {
+      query.issueDate = {};
+      if (startDate) query.issueDate.$gte = new Date(startDate);
+      if (endDate) query.issueDate.$lte = new Date(`${endDate}T23:59:59.999Z`);
+    }
 
+    const normalizedSearch = String(search || "").trim();
     if (normalizedSearch) {
-      const enriched = await Promise.all(filtered.map((invoice) => this.enrich(invoice)));
-      filtered = enriched.filter((invoice) => {
-        const haystack = [
-          invoice.invoiceNumber,
-          invoice.invoiceType,
-          invoice.relatedEntityType,
-          invoice.relatedEntityId,
-          invoice.sourceKey,
-          invoice.member,
-          invoice.memberName,
-          invoice.memberNumber,
-          invoice.plot,
-          invoice.plotNumber,
-          invoice.dealer,
-          invoice.dealerName,
-        ].filter(Boolean).join(" ").toLowerCase();
-        return haystack.includes(normalizedSearch);
-      });
+      const searchRegex = { $regex: normalizedSearch, $options: "i" };
+      query.$or = [
+        { invoiceNumber: searchRegex },
+        { invoiceType: searchRegex },
+        { relatedEntityType: searchRegex },
+        { relatedEntityId: searchRegex },
+        { sourceKey: searchRegex },
+        { member: searchRegex },
+        { plot: searchRegex },
+        { dealer: searchRegex },
+      ];
     }
 
     const currentPage = Math.max(1, Number(page) || 1);
     const pageSize = Math.min(100, Math.max(1, Number(limit) || 20));
-    const startIndex = (currentPage - 1) * pageSize;
-    const data = await Promise.all(
-      filtered.slice(startIndex, startIndex + pageSize).map((invoice) =>
-        normalizedSearch ? invoice : this.enrich(invoice),
-      ),
-    );
+    const skip = (currentPage - 1) * pageSize;
+    const [rows, total] = await Promise.all([
+      Invoice.find(query, { skip, limit: pageSize, sort: { issueDate: -1 } }),
+      Invoice.countDocuments(query),
+    ]);
+    const data = await Promise.all(rows.map((invoice) => this.enrich(invoice)));
     return {
       data,
       pagination: {
         page: currentPage,
         limit: pageSize,
-        total: filtered.length,
-        pages: Math.ceil(filtered.length / pageSize),
+        total,
+        pages: Math.ceil(total / pageSize),
       },
     };
   }

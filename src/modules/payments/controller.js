@@ -1,6 +1,7 @@
 const PDFDocument = require("pdfkit");
 const { PaymentService } = require("./service");
 const ApiResponse = require("../../utils/apiResponse");
+const { drawCivicaLogo } = require("../../utils/civicaBrand");
 
 exports.previewPayment = async (req, res) => ApiResponse.success(res, 200, await PaymentService.preview(req.body));
 exports.createPayment = async (req, res) => ApiResponse.success(res, 201, await PaymentService.create(req.body, req), "Payment recorded successfully");
@@ -13,7 +14,8 @@ exports.getReceipt = async (req, res) => {
   res.setHeader("Content-Disposition", `inline; filename="receipt-${payment.receiptNumber}.pdf"`);
   const pdf = new PDFDocument({ margin: 50 });
   pdf.pipe(res);
-  pdf.fontSize(20).text("Housing Society Payment Receipt").moveDown();
+  drawCivicaLogo(pdf, { x: 50, y: 40, width: 110 });
+  pdf.fontSize(16).fillColor("#0F172A").text("Payment Receipt").moveDown();
   pdf.fontSize(11).text(`Receipt: ${payment.receiptNumber}`).text(`Date: ${new Date(payment.createdAt).toLocaleString()}`).text(`Member: ${payment.memberRef?.name || payment.member}`).text(`Plot: ${payment.plotRef?.plotNumber || "—"}`).text(`Method: ${payment.method}`).text(`Amount: ${Number(payment.amount).toLocaleString()}`).moveDown().text(payment.remarks || "");
   pdf.end();
 };

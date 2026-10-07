@@ -1,3 +1,4 @@
+const { db } = require("../../config/db");
 const Expense = require("./expense.model");
 const { createAuditLog, AuditLog } = require("../administration/auditLog.model");
 const ApiError = require("../../utils/ApiError");
@@ -5,10 +6,22 @@ const InvoiceService = require("../invoices/service");
 
 class ExpenseService {
   static async list({ category, status, startDate, endDate, page = 1, limit = 20 }) {
-    const query = {}; if (category) query.category = category; if (status) query.status = status;
-    if (startDate || endDate) { query.date = {}; if (startDate) query.date.$gte = new Date(startDate).toISOString(); if (endDate) query.date.$lte = new Date(`${endDate}T23:59:59.999Z`).toISOString(); }
-    const all = await Expense.find(query, { sort: { date: -1 } }); const p = Number(page) || 1; const l = Number(limit) || 20;
-    return { data: all.slice((p - 1) * l, p * l), pagination: { page: p, limit: l, total: all.length, pages: Math.ceil(all.length / l) } };
+    const query = {};
+    if (category) query.category = category;
+    if (status) query.status = status;
+    if (startDate || endDate) {
+      query.date = {};
+      if (startDate) query.date.$gte = new Date(startDate).toISOString();
+      if (endDate) query.date.$lte = new Date(`${endDate}T23:59:59.999Z`).toISOString();
+    }
+    const p = Math.max(1, Number(page) || 1);
+    const l = Math.max(1, Number(limit) || 20);
+    const skip = (p - 1) * l;
+    const [rows, total] = await Promise.all([
+      Expense.find(query, { skip, limit: l, sort: { date: -1 } }),
+      db.collection(Expense.collectionName).countDocuments(query),
+    ]);
+    return { data: rows, pagination: { page: p, limit: l, total, pages: Math.ceil(total / l) } };
   }
   static async create(data, req) { const expense = await Expense.create(data, req.user._id); await createAuditLog({ req, entityType: "Expense", entityId: expense._id, action: AuditLog.ACTIONS.CREATE, changes: { after: expense } }); const fileUrl = expense.fileUrl || expense.invoiceUrl || expense.voucherUrl; if (fileUrl) await InvoiceService.safeRegisterInvoice("Expense", expense, { fileUrl, createdBy: req.user._id }); return expense; }
   static async transition(id, action, req) {

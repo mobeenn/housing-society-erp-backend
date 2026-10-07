@@ -1,4 +1,5 @@
 const PDFDocument = require("pdfkit");
+const { drawCivicaLogo } = require("../../utils/civicaBrand");
 
 function createLifecyclePdf({ title, reference, lines = [], footer = "" }) {
   return new Promise((resolve, reject) => {
@@ -8,6 +9,7 @@ function createLifecyclePdf({ title, reference, lines = [], footer = "" }) {
     document.on("end", () => resolve(Buffer.concat(chunks)));
     document.on("error", reject);
 
+    drawCivicaLogo(document, { x: 50, y: 40, width: 110 });
     document.fontSize(20).text(title, { align: "center" });
     document.moveDown(0.5);
     if (reference) document.fontSize(10).fillColor("#555").text(`Reference: ${reference}`, { align: "center" });

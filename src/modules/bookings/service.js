@@ -1,3 +1,4 @@
+const { db } = require("../../config/db");
 const { Booking, InstallmentPlan, Installment } = require("./booking.model");
 const { calculateNetPayable, calculateInstallmentSchedule } = require("./installmentCalculator");
 const PlotService = require("../properties/service");
@@ -82,18 +83,75 @@ class BookingService {
   }
 
   static async search({ search, status, page = 1, limit = 20 }) {
-    const all = await Booking.find({}, { sort: { createdAt: -1 } });
-    const results = [];
-    for (const booking of all) {
-      const [member, plot] = await Promise.all([Member.findById(booking.member), Plot.findById(booking.plot)]);
-      const haystack = [member?.name, member?.memberId, plot?.plotNumber, plot?.fileNumber].filter(Boolean).join(" ").toLowerCase();
-      if (search?.trim() && !haystack.includes(search.trim().toLowerCase())) continue;
-      if (status && booking.status !== status) continue;
-      results.push({ ...booking, memberRef: member, plotRef: plot });
-    }
     const numericPage = Number(page) || 1;
     const numericLimit = Number(limit) || 20;
-    return { data: results.slice((numericPage - 1) * numericLimit, numericPage * numericLimit), pagination: { page: numericPage, limit: numericLimit, total: results.length, pages: Math.ceil(results.length / numericLimit) } };
+    const skip = (numericPage - 1) * numericLimit;
+    const text = search?.trim();
+
+    const query = {};
+    if (status) query.status = status;
+
+    if (text) {
+      const [members, plots] = await Promise.all([
+        Member.find(
+          {
+            $or: [
+              { name: { $regex: text, $options: "i" } },
+              { memberId: { $regex: text, $options: "i" } },
+            ],
+          },
+          { limit: 200, select: { _id: 1 } }
+        ),
+        Plot.find(
+          {
+            $or: [
+              { plotNumber: { $regex: text, $options: "i" } },
+              { fileNumber: { $regex: text, $options: "i" } },
+            ],
+          },
+          { limit: 200, select: { _id: 1 } }
+        ),
+      ]);
+      const memberIds = members.map((m) => m._id);
+      const plotIds = plots.map((p) => p._id);
+      if (!memberIds.length && !plotIds.length) {
+        return { data: [], pagination: { page: numericPage, limit: numericLimit, total: 0, pages: 0 } };
+      }
+      const or = [];
+      if (memberIds.length) or.push({ member: { $in: memberIds } });
+      if (plotIds.length) or.push({ plot: { $in: plotIds } });
+      query.$or = or;
+    }
+
+    const [bookings, total] = await Promise.all([
+      Booking.find(query, { skip, limit: numericLimit, sort: { createdAt: -1 } }),
+      db.collection(Booking.collectionName).countDocuments(query),
+    ]);
+
+    const memberIds = [...new Set(bookings.map((b) => b.member).filter(Boolean))];
+    const plotIds = [...new Set(bookings.map((b) => b.plot).filter(Boolean))];
+    const [members, plots] = await Promise.all([
+      memberIds.length ? Member.find({ _id: { $in: memberIds } }) : [],
+      plotIds.length ? Plot.find({ _id: { $in: plotIds } }) : [],
+    ]);
+    const memberMap = new Map(members.map((m) => [m._id, m]));
+    const plotMap = new Map(plots.map((p) => [p._id, p]));
+
+    const data = bookings.map((booking) => ({
+      ...booking,
+      memberRef: memberMap.get(booking.member) || null,
+      plotRef: plotMap.get(booking.plot) || null,
+    }));
+
+    return {
+      data,
+      pagination: {
+        page: numericPage,
+        limit: numericLimit,
+        total,
+        pages: Math.ceil(total / numericLimit) || 0,
+      },
+    };
   }
 
   static async approve(id, data, req) {

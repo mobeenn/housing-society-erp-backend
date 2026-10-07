@@ -43,7 +43,30 @@ const legacyModuleByPrefix = {
 
 const ACTIONS = ["view", "create", "edit", "delete", "approve", "reject", "cancel", "print", "export", "refund"];
 
+const MY_ACCESS_TTL_MS = 60 * 1000;
+const moduleIdByKey = new Map();
+const myAccessCache = new Map();
+
 const defaultActions = () => Object.fromEntries(ACTIONS.map((action) => [action, false]));
+
+function myAccessCacheKey(userId, roleIds) {
+  return `${userId || ""}:${[...roleIds].sort().join(",")}`;
+}
+
+function invalidateMyAccessCache() {
+  myAccessCache.clear();
+}
+
+async function resolveModuleId(moduleKey) {
+  if (moduleIdByKey.has(moduleKey)) return moduleIdByKey.get(moduleKey);
+  const module = await prisma.rbacModule.findFirst({
+    where: { key: moduleKey, isActive: true },
+    select: { id: true, key: true },
+  });
+  if (!module) return null;
+  moduleIdByKey.set(module.key, module.id);
+  return module.id;
+}
 
 function legacyPermissionToModuleAction(permission) {
   if (!permission || typeof permission !== "string") return null;
@@ -164,11 +187,21 @@ class RbacService {
   }
 
   static async getMyAccess(user) {
+    const roleIds = this.roleIds(user);
+    const cacheKey = myAccessCacheKey(user.id || user._id, roleIds);
+    const cached = myAccessCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < MY_ACCESS_TTL_MS) {
+      return cached.value;
+    }
+
     const modules = await this.activeModules();
+    for (const module of modules) moduleIdByKey.set(module.key, module.id);
+
+    let value;
     if (this.isSuperAdmin(user)) {
-      return {
+      value = {
         userId: user.id,
-        roleIds: this.roleIds(user),
+        roleIds,
         isSuperAdmin: true,
         dashboardType: this.dashboardTypeForUser(user),
         generatedAt: new Date().toISOString(),
@@ -186,38 +219,40 @@ class RbacService {
           actions: Object.fromEntries(ACTIONS.map((action) => [action, true])),
         })),
       };
+    } else {
+      const records = await prisma.roleModuleAccess.findMany({
+        where: { roleId: { in: roleIds }, isVisible: true },
+      });
+      const byModule = new Map();
+      records.filter((record) => roleIds.includes(record.roleId) && record.isVisible).forEach((record) => {
+        const current = byModule.get(record.moduleId) || defaultActions();
+        ACTIONS.forEach((action) => { current[action] = current[action] || record.actions?.[action] === true; });
+        byModule.set(record.moduleId, current);
+      });
+
+      value = {
+        userId: user.id,
+        roleIds,
+        isSuperAdmin: false,
+        dashboardType: this.dashboardTypeForUser(user),
+        generatedAt: new Date().toISOString(),
+        modules: modules.map((module) => ({
+          key: module.key,
+          label: module.label,
+          description: module.description,
+          group: module.group,
+          icon: module.icon,
+          route: module.route,
+          sortOrder: module.sortOrder,
+          isActive: module.isActive,
+          isVisible: byModule.has(module.id),
+          actions: byModule.get(module.id) || defaultActions(),
+        })),
+      };
     }
 
-    const roleIds = this.roleIds(user);
-    const records = await prisma.roleModuleAccess.findMany({
-      where: { roleId: { in: roleIds }, isVisible: true },
-    });
-    const byModule = new Map();
-    records.filter((record) => roleIds.includes(record.roleId) && record.isVisible).forEach((record) => {
-      const current = byModule.get(record.moduleId) || defaultActions();
-      ACTIONS.forEach((action) => { current[action] = current[action] || record.actions?.[action] === true; });
-      byModule.set(record.moduleId, current);
-    });
-
-    return {
-      userId: user.id,
-      roleIds,
-      isSuperAdmin: false,
-      dashboardType: this.dashboardTypeForUser(user),
-      generatedAt: new Date().toISOString(),
-      modules: modules.map((module) => ({
-        key: module.key,
-        label: module.label,
-        description: module.description,
-        group: module.group,
-        icon: module.icon,
-        route: module.route,
-        sortOrder: module.sortOrder,
-        isActive: module.isActive,
-        isVisible: byModule.has(module.id),
-        actions: byModule.get(module.id) || defaultActions(),
-      })),
-    };
+    myAccessCache.set(cacheKey, { at: Date.now(), value });
+    return value;
   }
 
   static async getRoleAccessGrid(roleId) {
@@ -296,6 +331,7 @@ class RbacService {
         },
       });
     }
+    invalidateMyAccessCache();
     return this.getRoleAccessGrid(roleId);
   }
 
@@ -461,15 +497,19 @@ class RbacService {
   static async isAllowed(user, moduleKey, action) {
     if (this.isSuperAdmin(user)) return true;
     if (!ACTIONS.includes(action)) return false;
-    const modules = await prisma.rbacModule.findMany({
-      where: { key: moduleKey, isActive: true },
-    });
-    if (!modules.length) return false;
     const roleIds = this.roleIds(user);
-    const records = await prisma.roleModuleAccess.findMany({
-      where: { moduleId: modules[0].id },
+    if (!roleIds.length) return false;
+    const moduleId = await resolveModuleId(moduleKey);
+    if (!moduleId) return false;
+    const record = await prisma.roleModuleAccess.findFirst({
+      where: {
+        moduleId,
+        roleId: { in: roleIds },
+        isVisible: true,
+        actions: { path: [action], equals: true },
+      },
     });
-    return records.some((record) => roleIds.includes(record.roleId) && record.isVisible === true && record.actions?.[action] === true);
+    return Boolean(record);
   }
 }
 

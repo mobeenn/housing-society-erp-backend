@@ -66,39 +66,60 @@ app.use("/api", apiLimiter);
 // Routes
 // ══════════════════════════════════════════════════
 
-// Health check
+// Lightweight health check (load balancers / uptime pings)
 app.get("/api/health", async (_req, res) => {
-  // Check database connectivity
   let database = "down";
-  let tableCount = null;
   try {
     await prisma.$queryRaw`SELECT 1`;
     database = "up";
-    const [{ count }] = await prisma.$queryRaw`
-      SELECT COUNT(*)::int AS count
-      FROM information_schema.tables
-      WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
-      AND table_name <> '_prisma_migrations'
-    `;
-    tableCount = count;
   } catch {
     database = "down";
   }
 
-  // Check storage connectivity
+  ApiResponse.success(res, 200, "OK", {
+    database,
+    persistence: "postgresql-prisma",
+  });
+});
+
+// Deep health: table count + storage (not for frequent probes)
+app.get("/api/health/deep", async (_req, res) => {
+  let database = "down";
+  let tableCount = null;
   let storage = "down";
-  try {
-    const { error } = await supabaseAdmin.storage.listBuckets();
-    if (!error) storage = "up";
-  } catch {
-    storage = "down";
-  }
+
+  const [dbResult, storageResult] = await Promise.all([
+    (async () => {
+      try {
+        await prisma.$queryRaw`SELECT 1`;
+        const [{ count }] = await prisma.$queryRaw`
+          SELECT COUNT(*)::int AS count
+          FROM information_schema.tables
+          WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+          AND table_name <> '_prisma_migrations'
+        `;
+        return { database: "up", tableCount: count };
+      } catch {
+        return { database: "down", tableCount: null };
+      }
+    })(),
+    (async () => {
+      try {
+        const { error } = await supabaseAdmin.storage.listBuckets();
+        return error ? "down" : "up";
+      } catch {
+        return "down";
+      }
+    })(),
+  ]);
+
+  database = dbResult.database;
+  tableCount = dbResult.tableCount;
+  storage = storageResult;
 
   ApiResponse.success(res, 200, "OK", {
     database,
     storage,
-    // The datastore is PostgreSQL via Prisma. data/db.json is no longer opened
-    // at runtime; it is only read by the one-time import script.
     persistence: "postgresql-prisma",
     tables: tableCount,
   });

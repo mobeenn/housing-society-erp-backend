@@ -1,5 +1,5 @@
 /**
- * Prisma client singleton for the Housing Society ERP backend.
+ * Prisma client singleton for the Civica backend.
  *
  * Uses @prisma/adapter-pg (PrismaPg) with DATABASE_URL (pooled, runtime).
  * Guarded against multiple instances during nodemon reloads.

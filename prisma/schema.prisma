@@ -493,6 +493,7 @@ model RoleModuleAccess {
   module RbacModule @relation(fields: [moduleId], references: [id], onDelete: Cascade)
 
   @@unique([roleId, moduleId])
+  @@index([moduleId])
   @@map("role_module_access")
 }
 
@@ -714,6 +715,9 @@ model Member {
 
   @@index([cnic])
   @@index([memberId])
+  @@index([status])
+  @@index([phone])
+  @@index([createdAt])
   @@map("members")
 }
 
@@ -738,6 +742,12 @@ model Plot {
 
   @@index([plotNumber])
   @@index([currentOwner])
+  @@index([status])
+  @@index([block])
+  @@index([street])
+  @@index([fileNumber])
+  @@index([isBlocked])
+  @@index([createdAt])
   @@map("plots")
 }
 
@@ -779,6 +789,8 @@ model Booking {
 
   @@index([member])
   @@index([plot])
+  @@index([status])
+  @@index([createdAt])
   @@map("bookings")
 }
 
@@ -835,6 +847,9 @@ model Payment {
 
   @@index([member])
   @@index([status])
+  @@index([plot])
+  @@index([createdAt])
+  @@index([receiptNumber])
   @@map("payments")
 }
 
@@ -1426,6 +1441,7 @@ model Notice {
   createdAt       DateTime?
   updatedAt       DateTime?
 
+  @@index([createdAt])
   @@map("notices")
 }
 
@@ -1500,6 +1516,11 @@ model Invoice {
 
   @@index([invoiceType])
   @@index([storageBucket])
+  @@index([member])
+  @@index([plot])
+  @@index([status])
+  @@index([issueDate])
+  @@index([invoiceNumber])
   @@map("invoices")
 }
 
@@ -1516,6 +1537,7 @@ model RecoveryAssignment {
 
   @@index([booking])
   @@index([agent])
+  @@index([status])
   @@map("recovery_assignments")
 }
 
@@ -1618,6 +1640,7 @@ model Appointment {
   createdAt    DateTime?
   updatedAt    DateTime?
 
+  @@index([createdAt])
   @@map("appointments")
 }
 

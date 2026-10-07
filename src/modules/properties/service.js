@@ -1,3 +1,4 @@
+const { db } = require("../../config/db");
 const { Plot, OwnershipHistory } = require("./plot.model");
 const { canTransition } = require("./stateMachine");
 const { Block, Street, PlotCategory, PropertyType } = require("../administration/masterData.model");
@@ -32,34 +33,98 @@ class PlotService {
   }
 
   static async search(filters) {
-    const all = await Plot.find({}, { sort: { createdAt: -1 } });
-    const search = filters.search?.trim().toLowerCase();
-    const matches = [];
-    for (const plot of all) {
-      const refs = await Promise.all([
-        Block.findById(plot.block),
-        Street.findById(plot.street),
-        PlotCategory.findById(plot.category),
-        plot.currentOwner ? Member.findById(plot.currentOwner) : null,
-      ]);
-      const [block, street, category, owner] = refs;
-      const haystack = [plot.plotNumber, plot.fileNumber, plot.location, block?.name, street?.name, owner?.name, owner?.memberId]
-        .filter(Boolean).join(" ").toLowerCase();
-      if (search && !haystack.includes(search)) continue;
-      if (filters.plot && plot.plotNumber?.toLowerCase() !== filters.plot.toLowerCase()) continue;
-      if (filters.owner && plot.currentOwner !== filters.owner && owner?.name?.toLowerCase() !== filters.owner.toLowerCase()) continue;
-      if (filters.file && plot.fileNumber?.toLowerCase() !== filters.file.toLowerCase()) continue;
-      if (filters.block && plot.block !== filters.block) continue;
-      if (filters.street && plot.street !== filters.street) continue;
-      if (filters.category && plot.category !== filters.category) continue;
-      if (filters.status && plot.status !== filters.status) continue;
-      matches.push({ ...plot, blockRef: block, streetRef: street, categoryRef: category, currentOwnerRef: owner });
-    }
     const page = Number(filters.page) || 1;
     const limit = Number(filters.limit) || 20;
+    const skip = (page - 1) * limit;
+    const search = filters.search?.trim();
+    const ownerFilter = filters.owner?.trim();
+
+    const query = {};
+    if (filters.status) query.status = filters.status;
+    if (filters.block) query.block = filters.block;
+    if (filters.street) query.street = filters.street;
+    if (filters.category) query.category = filters.category;
+    // Exact filters: $regex maps to Prisma `contains`, so use equality here.
+    if (filters.plot) query.plotNumber = filters.plot.trim();
+    if (filters.file) query.fileNumber = filters.file.trim();
+
+    if (ownerFilter) {
+      const looksLikeId = /^[a-zA-Z0-9_-]{8,}$/.test(ownerFilter) && !/\s/.test(ownerFilter);
+      if (looksLikeId) {
+        query.currentOwner = ownerFilter;
+      } else {
+        const matchingOwners = await Member.find(
+          {
+            $or: [
+              { name: { $regex: ownerFilter, $options: "i" } },
+              { memberId: { $regex: ownerFilter, $options: "i" } },
+            ],
+          },
+          { limit: 200, select: { _id: 1 } }
+        );
+        query.currentOwner = { $in: matchingOwners.map((m) => m._id) };
+      }
+    }
+
+    if (search) {
+      const textOr = [
+        { plotNumber: { $regex: search, $options: "i" } },
+        { fileNumber: { $regex: search, $options: "i" } },
+        { location: { $regex: search, $options: "i" } },
+      ];
+      // Also match owners / blocks / streets by name (best-effort join via $in)
+      const [ownerHits, blockHits, streetHits] = await Promise.all([
+        Member.find(
+          {
+            $or: [
+              { name: { $regex: search, $options: "i" } },
+              { memberId: { $regex: search, $options: "i" } },
+            ],
+          },
+          { limit: 100, select: { _id: 1 } }
+        ),
+        Block.find({ name: { $regex: search, $options: "i" } }, { limit: 50, select: { _id: 1 } }),
+        Street.find({ name: { $regex: search, $options: "i" } }, { limit: 50, select: { _id: 1 } }),
+      ]);
+      if (ownerHits.length) textOr.push({ currentOwner: { $in: ownerHits.map((m) => m._id) } });
+      if (blockHits.length) textOr.push({ block: { $in: blockHits.map((b) => b._id) } });
+      if (streetHits.length) textOr.push({ street: { $in: streetHits.map((s) => s._id) } });
+      query.$or = textOr;
+    }
+
+    const [plots, total] = await Promise.all([
+      Plot.find(query, { skip, limit, sort: { createdAt: -1 } }),
+      db.collection(Plot.collectionName).countDocuments(query),
+    ]);
+
+    const blockIds = [...new Set(plots.map((p) => p.block).filter(Boolean))];
+    const streetIds = [...new Set(plots.map((p) => p.street).filter(Boolean))];
+    const categoryIds = [...new Set(plots.map((p) => p.category).filter(Boolean))];
+    const ownerIds = [...new Set(plots.map((p) => p.currentOwner).filter(Boolean))];
+
+    const [blocks, streets, categories, owners] = await Promise.all([
+      blockIds.length ? Block.find({ _id: { $in: blockIds } }) : [],
+      streetIds.length ? Street.find({ _id: { $in: streetIds } }) : [],
+      categoryIds.length ? PlotCategory.find({ _id: { $in: categoryIds } }) : [],
+      ownerIds.length ? Member.find({ _id: { $in: ownerIds } }) : [],
+    ]);
+
+    const blockMap = new Map(blocks.map((b) => [b._id, b]));
+    const streetMap = new Map(streets.map((s) => [s._id, s]));
+    const categoryMap = new Map(categories.map((c) => [c._id, c]));
+    const ownerMap = new Map(owners.map((o) => [o._id, o]));
+
+    const data = plots.map((plot) => ({
+      ...plot,
+      blockRef: blockMap.get(plot.block) || null,
+      streetRef: streetMap.get(plot.street) || null,
+      categoryRef: categoryMap.get(plot.category) || null,
+      currentOwnerRef: plot.currentOwner ? ownerMap.get(plot.currentOwner) || null : null,
+    }));
+
     return {
-      data: matches.slice((page - 1) * limit, page * limit),
-      pagination: { page, limit, total: matches.length, pages: Math.ceil(matches.length / limit) },
+      data,
+      pagination: { page, limit, total, pages: Math.ceil(total / limit) || 0 },
     };
   }
 

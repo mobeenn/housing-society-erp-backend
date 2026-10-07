@@ -18,6 +18,10 @@ const SEARCH_CONFIG = [
   { type: "vendor", label: "Vendors", collection: "vendors", fields: ["name", "contactPerson", "email", "category"], title: (item) => item.name, subtitle: (item) => `${item.category} · ${item.contactPerson || "No contact"}`, route: () => "/procurement/vendors" },
 ];
 
+const PER_COLLECTION_LIMIT = 10;
+/** DateTime columns cannot use Prisma `contains` (how $regex is mapped). */
+const NON_TEXT_FIELDS = new Set(["bookingDate", "createdAt", "updatedAt", "date", "dueDate", "entryTime"]);
+
 class SearchService {
   static score(item, fields, query) {
     const normalized = query.toLowerCase();
@@ -36,11 +40,24 @@ class SearchService {
     return best + Math.max(0, 10 - ageDays / 30);
   }
 
+  static async searchCollection(config, query) {
+    const textFields = config.fields.filter((field) => !NON_TEXT_FIELDS.has(field));
+    if (!textFields.length) return [];
+    const filter = {
+      $or: textFields.map((field) => ({ [field]: { $regex: query, $options: "i" } })),
+    };
+    return db.collection(config.collection).find(filter, {
+      limit: PER_COLLECTION_LIMIT,
+      sort: { updatedAt: -1 },
+    });
+  }
+
   static async search(q, limit = 30) {
     const query = String(q || "").trim();
     if (query.length < 2) return { query, total: 0, groups: [], items: [] };
     const safeLimit = Math.min(100, Math.max(1, Number(limit) || 30));
-    const collections = await Promise.all(SEARCH_CONFIG.map((config) => db.collection(config.collection).find({})));
+
+    const collections = await Promise.all(SEARCH_CONFIG.map((config) => this.searchCollection(config, query)));
     const results = [];
 
     SEARCH_CONFIG.forEach((config, index) => {

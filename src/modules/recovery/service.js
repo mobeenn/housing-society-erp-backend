@@ -53,6 +53,18 @@ function isOverdueInstallment(installment, now = new Date()) {
   return status === "overdue" || number(installment.overdueDays) > 0;
 }
 
+function indexInstallmentsByBooking(installments, plansById) {
+  const installmentsByBooking = new Map();
+  for (const installment of installments) {
+    const bookingId = installment.booking || plansById.get(installment.plan)?.booking || null;
+    if (!bookingId) continue;
+    const list = installmentsByBooking.get(bookingId);
+    if (list) list.push(installment);
+    else installmentsByBooking.set(bookingId, [installment]);
+  }
+  return installmentsByBooking;
+}
+
 async function loadContext() {
   const [bookings, installments, plans, members, plots] = await Promise.all([
     Booking.find({}),
@@ -61,17 +73,36 @@ async function loadContext() {
     Member.find({}),
     Plot.find({}),
   ]);
+  const plansById = new Map(plans.map((plan) => [plan._id, plan]));
+  const membersById = new Map(members.map((member) => [member._id, member]));
+  const plotsById = new Map(plots.map((plot) => [plot._id, plot]));
+  const bookingsById = new Map(bookings.map((booking) => [booking._id, booking]));
   return {
     bookings,
     installments,
-    plans: new Map(plans.map((plan) => [plan._id, plan])),
-    members: new Map(members.map((member) => [member._id, member])),
-    plots: new Map(plots.map((plot) => [plot._id, plot])),
+    bookingsById,
+    installmentsByBooking: indexInstallmentsByBooking(installments, plansById),
+    plans: plansById,
+    members: membersById,
+    plots: plotsById,
   };
 }
 
 function bookingIdForInstallment(installment, context) {
   return installment.booking || context.plans.get(installment.plan)?.booking || null;
+}
+
+async function loadActiveAssignmentsByBooking() {
+  const assignments = await RecoveryAssignment.find(
+    { status: { $in: RecoveryAssignment.ACTIVE_STATUSES } },
+    { sort: { assignedDate: -1 } },
+  );
+  const byBooking = new Map();
+  for (const assignment of assignments) {
+    if (!assignment.booking || byBooking.has(assignment.booking)) continue;
+    byBooking.set(assignment.booking, assignment);
+  }
+  return byBooking;
 }
 
 function paginate(rows, page = 1, limit = 20, maxPageSize = 100) {
@@ -102,9 +133,11 @@ class RecoveryService {
   }
 
   static summarizeBooking(bookingId, context, now = new Date()) {
-    const booking = context.bookings.find((item) => item._id === bookingId);
+    const booking = context.bookingsById?.get(bookingId)
+      || context.bookings.find((item) => item._id === bookingId);
     if (!booking || booking.status === Booking.STATUS.CANCELLED) return null;
-    const installments = context.installments.filter((item) => bookingIdForInstallment(item, context) === bookingId);
+    const installments = context.installmentsByBooking?.get(bookingId)
+      || context.installments.filter((item) => bookingIdForInstallment(item, context) === bookingId);
     const totalDue = installments.reduce((sum, item) => sum + installmentDue(item), 0);
     const paidAmount = installments.reduce((sum, item) => sum + Math.min(installmentPaid(item), installmentDue(item)), 0);
     const overdueInstallments = installments.filter((item) => isOverdueInstallment(item, now));
@@ -189,8 +222,10 @@ class RecoveryService {
     maxRecoveryPercent,
     minRecoveryPercent,
   } = {}) {
-    await this.runAutoBlockCheck();
-    const context = await loadContext();
+    const [context, activeByBooking] = await Promise.all([
+      loadContext(),
+      loadActiveAssignmentsByBooking(),
+    ]);
     const query = String(search || "").trim().toLowerCase();
     const minDays = number(minDaysOverdue);
     const maxDays = optionalNumber(maxDaysOverdue);
@@ -201,7 +236,7 @@ class RecoveryService {
     for (const booking of context.bookings) {
       const summary = this.summarizeBooking(booking._id, context);
       if (!summary?.isOverdue) continue;
-      if (await this.getActiveAssignment(booking._id)) continue;
+      if (activeByBooking.has(booking._id)) continue;
       if (minDays > 0 && summary.daysOverdue < minDays) continue;
       if (maxDays !== null && summary.daysOverdue > maxDays) continue;
       if (maxPercent !== null && summary.recoveryPercent > maxPercent) continue;
@@ -318,7 +353,6 @@ class RecoveryService {
   }
 
   static async listMyPlots(user, { page = 1, limit = 50 } = {}) {
-    await this.runAutoBlockCheck();
     const assignments = await RecoveryAssignment.findByAgent(user._id);
     const context = await loadContext();
     const rows = (await Promise.all(assignments.map((assignment) => this.enrichAssignment(assignment, context))))
@@ -328,7 +362,6 @@ class RecoveryService {
   }
 
   static async listAssignments({ status, agent, page = 1, limit = 50 } = {}) {
-    await this.runAutoBlockCheck();
     let assignments = await RecoveryAssignment.find({});
     if (status) assignments = assignments.filter((item) => item.status === status);
     if (agent) assignments = assignments.filter((item) => item.agent === agent);
@@ -447,24 +480,44 @@ class RecoveryService {
     minRecoveryPercent,
     internal = false,
   } = {}) {
-    await this.runAutoBlockCheck();
     const supervisor = await this.isSupervisor(user);
-    const context = await loadContext();
-    const assignedBookings = supervisor ? null : new Set((await RecoveryAssignment.findByAgent(user._id)).filter((item) => [RecoveryAssignment.STATUS.ASSIGNED, RecoveryAssignment.STATUS.IN_PROGRESS].includes(item.status)).map((item) => item.booking));
+    const today = startOfToday();
+    const [context, activeByBooking, overdueCandidates, agentAssignments] = await Promise.all([
+      loadContext(),
+      loadActiveAssignmentsByBooking(),
+      Installment.find({
+        balance: { $gt: 0 },
+        dueDate: { $lt: today },
+      }),
+      supervisor ? Promise.resolve(null) : RecoveryAssignment.findByAgent(user._id),
+    ]);
+    const assignedBookings = supervisor
+      ? null
+      : new Set(
+        (agentAssignments || [])
+          .filter((item) => RecoveryAssignment.ACTIVE_STATUSES.includes(item.status))
+          .map((item) => item.booking),
+      );
+    const candidateBookingIds = new Set();
+    for (const installment of overdueCandidates) {
+      const bookingId = bookingIdForInstallment(installment, context);
+      if (bookingId) candidateBookingIds.add(bookingId);
+    }
     const query = String(search || "").trim().toLowerCase();
     const minDays = number(minDaysOverdue);
     const maxDays = optionalNumber(maxDaysOverdue);
     const maxPercent = optionalNumber(maxRecoveryPercent);
     const minPercent = optionalNumber(minRecoveryPercent);
     const rows = [];
-    for (const booking of context.bookings) {
-      if (assignedBookings && !assignedBookings.has(booking._id)) continue;
-      const summary = this.summarizeBooking(booking._id, context);
+    for (const bookingId of candidateBookingIds) {
+      if (assignedBookings && !assignedBookings.has(bookingId)) continue;
+      const summary = this.summarizeBooking(bookingId, context);
       if (!summary?.isOverdue) continue;
       if (minDays > 0 && summary.daysOverdue < minDays) continue;
       if (maxDays !== null && summary.daysOverdue > maxDays) continue;
       if (maxPercent !== null && summary.recoveryPercent > maxPercent) continue;
       if (minPercent !== null && summary.recoveryPercent < minPercent) continue;
+      const assignment = activeByBooking.get(summary.bookingId) || null;
       for (const installment of summary.overdueInstallments) {
         const row = {
           ...installment,
@@ -478,7 +531,7 @@ class RecoveryService {
           daysOverdue: daysOverdue(installment),
           outstandingAmount: installmentBalance(installment),
           isBlocked: summary.isBlocked,
-          assignment: await this.getActiveAssignment(summary.bookingId),
+          assignment,
         };
         const haystack = [row._id, row.bookingId, row.memberRef?.name, row.memberRef?.memberId, row.plotRef?.plotNumber, row.plotRef?.fileNumber]
           .filter(Boolean).join(" ").toLowerCase();

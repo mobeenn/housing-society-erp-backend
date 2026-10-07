@@ -1,11 +1,22 @@
-const { db } = require("../../config/db");
+const { prisma } = require("../../config/prisma");
+const { raw } = require("../../generated/prisma/client");
 const { Plot } = require("../properties/plot.model");
 const { OPEN_STATUSES } = require("../complaints/complaint.config");
 
-const sum = (records, field) => records.reduce((total, record) => total + Number(record[field] || 0), 0);
+const CACHE_TTL_MS = 45_000;
+const cache = new Map();
+
+const OCCUPIED_STATUSES = [
+  Plot.STATUS.ALLOTTED,
+  Plot.STATUS.SOLD,
+  Plot.STATUS.TRANSFERRED,
+  Plot.STATUS.POSSESSED,
+  Plot.STATUS.UNDER_CONSTRUCTION,
+  Plot.STATUS.CONSTRUCTED,
+];
+
 const now = () => new Date();
-const monthKey = (value) => String(value || "").slice(0, 7);
-const dateKey = (value) => String(value || "").slice(0, 10);
+const toNumber = (value) => (value === null || value === undefined ? 0 : Number(value));
 
 const lastMonths = (count = 6) => {
   const current = now();
@@ -26,15 +37,6 @@ const lastDays = (count = 7) => {
   });
 };
 
-const groupCount = (records, field, label = field) => {
-  const groups = new Map();
-  records.forEach((record) => {
-    const value = record[field] || "Unspecified";
-    groups.set(value, (groups.get(value) || 0) + 1);
-  });
-  return Array.from(groups, ([key, count]) => ({ [label]: key, count }));
-};
-
 const responseHeader = (type, extra = {}) => ({
   type,
   generatedAt: new Date().toISOString(),
@@ -42,199 +44,553 @@ const responseHeader = (type, extra = {}) => ({
   ...extra,
 });
 
+/** Map a raw SQL row to the legacy document shape (`_id`, ISO dates, numeric decimals). */
+const toDoc = (row) => {
+  if (!row) return null;
+  const doc = {};
+  for (const [key, value] of Object.entries(row)) {
+    if (value === null || value === undefined) {
+      doc[key] = null;
+    } else if (value instanceof Date) {
+      doc[key] = value.toISOString();
+    } else if (typeof value === "object" && typeof value.toNumber === "function") {
+      doc[key] = value.toNumber();
+    } else if (typeof value === "bigint") {
+      doc[key] = Number(value);
+    } else {
+      doc[key] = value;
+    }
+  }
+  if (doc.id !== undefined && doc._id === undefined) doc._id = doc.id;
+  return doc;
+};
+
+const toDocs = (rows) => (rows || []).map(toDoc);
+
+const monthStartUtc = (monthsAgo = 5) => {
+  const current = now();
+  return new Date(Date.UTC(current.getUTCFullYear(), current.getUTCMonth() - monthsAgo, 1));
+};
+
+const dayStartUtc = (daysAgo = 6) => {
+  const current = now();
+  const d = new Date(Date.UTC(current.getUTCFullYear(), current.getUTCMonth(), current.getUTCDate() - daysAgo));
+  return d;
+};
+
+const sqlStringList = (values) => values.map((v) => `'${String(v).replace(/'/g, "''")}'`).join(", ");
+
 class DashboardService {
-  static async loadData() {
-    const names = [
-      "members",
-      "plots",
-      "blocks",
-      "installments",
-      "payments",
-      "expenses",
-      "complaints",
-      "workOrders",
-      "assets",
-      "visitorEntries",
-      "vehicles",
-      "guards",
-      "passes",
-      "employees",
-      "purchaseOrders",
-      "vendors",
-      "inventoryItems",
-      "transferRequests",
-      "nocApplications",
-      "possessionApplications",
-      "constructionApplications",
-    ];
-    const values = await Promise.all(names.map((name) => db.collection(name).find({})));
-    return Object.fromEntries(names.map((name, index) => [name, values[index]]));
+  static async count(table, whereSql = "") {
+    const rows = whereSql
+      ? await prisma.$queryRaw`SELECT COUNT(*)::int AS count FROM ${raw(table)} WHERE ${raw(whereSql)}`
+      : await prisma.$queryRaw`SELECT COUNT(*)::int AS count FROM ${raw(table)}`;
+    return toNumber(rows[0]?.count);
   }
 
-  static lowStock(items) {
-    return (items || [])
-      .filter((item) => Number(item.quantity || 0) <= Number(item.reorderLevel || 0))
-      .map((item) => ({ ...item, shortage: Math.max(0, Number(item.reorderLevel || 0) - Number(item.quantity || 0)) }))
-      .sort((a, b) => b.shortage - a.shortage);
+  static async sum(table, column, whereSql = "") {
+    const rows = whereSql
+      ? await prisma.$queryRaw`
+          SELECT COALESCE(SUM(${raw(column)}), 0)::float8 AS total
+          FROM ${raw(table)}
+          WHERE ${raw(whereSql)}
+        `
+      : await prisma.$queryRaw`
+          SELECT COALESCE(SUM(${raw(column)}), 0)::float8 AS total
+          FROM ${raw(table)}
+        `;
+    return toNumber(rows[0]?.total);
   }
 
-  static financialTrend(data) {
+  static async groupByStatus(table, statusColumn = "status") {
+    const rows = await prisma.$queryRaw`
+      SELECT COALESCE(${raw(statusColumn)}, 'Unspecified') AS label,
+             COUNT(*)::int AS count
+      FROM ${raw(table)}
+      GROUP BY 1
+      ORDER BY 1
+    `;
+    return rows.map((r) => ({ label: r.label, count: toNumber(r.count) }));
+  }
+
+  static async financialTrend() {
     const months = lastMonths();
+    const start = monthStartUtc(5);
+    const [billed, collected, expenses] = await Promise.all([
+      prisma.$queryRaw`
+        SELECT to_char(date_trunc('month', "dueDate"), 'YYYY-MM') AS period,
+               COALESCE(SUM(amount), 0)::float8 AS total
+        FROM installments
+        WHERE "dueDate" >= ${start}::timestamptz
+        GROUP BY 1
+      `,
+      prisma.$queryRaw`
+        SELECT to_char(date_trunc('month', "createdAt"), 'YYYY-MM') AS period,
+               COALESCE(SUM(amount), 0)::float8 AS total
+        FROM payments
+        WHERE status = 'Completed' AND "createdAt" >= ${start}::timestamptz
+        GROUP BY 1
+      `,
+      prisma.$queryRaw`
+        SELECT to_char(date_trunc('month', date), 'YYYY-MM') AS period,
+               COALESCE(SUM(amount), 0)::float8 AS total
+        FROM expenses
+        WHERE status = 'Paid' AND date >= ${start}::timestamptz
+        GROUP BY 1
+      `,
+    ]);
+    const billedMap = new Map(billed.map((r) => [r.period, toNumber(r.total)]));
+    const collectedMap = new Map(collected.map((r) => [r.period, toNumber(r.total)]));
+    const expenseMap = new Map(expenses.map((r) => [r.period, toNumber(r.total)]));
     return months.map(({ key, label }) => ({
       month: label,
       period: key,
-      billed: sum(data.installments.filter((item) => monthKey(item.dueDate) === key), "amount"),
-      collected: sum(data.payments.filter((item) => monthKey(item.createdAt) === key && item.status === "Completed"), "amount"),
-      expenses: sum(data.expenses.filter((item) => monthKey(item.date) === key && item.status === "Paid"), "amount"),
+      billed: billedMap.get(key) || 0,
+      collected: collectedMap.get(key) || 0,
+      expenses: expenseMap.get(key) || 0,
     }));
   }
 
-  static management(data) {
-    const occupied = data.plots.filter((plot) => plot.currentOwner && [Plot.STATUS.ALLOTTED, Plot.STATUS.SOLD, Plot.STATUS.TRANSFERRED, Plot.STATUS.POSSESSED, Plot.STATUS.UNDER_CONSTRUCTION, Plot.STATUS.CONSTRUCTED].includes(plot.status));
-    const openComplaints = data.complaints.filter((item) => OPEN_STATUSES.includes(item.status));
+  static async lowStock() {
+    const rows = await prisma.$queryRaw`
+      SELECT *
+      FROM inventory_items
+      WHERE COALESCE(quantity, 0) <= COALESCE("reorderLevel", 0)
+      ORDER BY (COALESCE("reorderLevel", 0) - COALESCE(quantity, 0)) DESC
+    `;
+    return toDocs(rows).map((item) => ({
+      ...item,
+      shortage: Math.max(0, Number(item.reorderLevel || 0) - Number(item.quantity || 0)),
+    }));
+  }
+
+  static async recentPayments(limit = 6) {
+    const rows = await prisma.$queryRaw`
+      SELECT * FROM payments
+      ORDER BY "createdAt" DESC NULLS LAST, id DESC
+      LIMIT ${limit}
+    `;
+    return toDocs(rows);
+  }
+
+  static async openComplaintsList(limit = 6) {
+    const statuses = sqlStringList(OPEN_STATUSES);
+    const rows = await prisma.$queryRaw`
+      SELECT * FROM complaints
+      WHERE status IN (${raw(statuses)})
+      ORDER BY "createdAt" DESC NULLS LAST, id DESC
+      LIMIT ${limit}
+    `;
+    return toDocs(rows);
+  }
+
+  static async management() {
+    const monthPrefix = now().toISOString().slice(0, 7);
+    const occupiedStatuses = sqlStringList(OCCUPIED_STATUSES);
+    const openStatuses = sqlStringList(OPEN_STATUSES);
+
+    const [
+      members,
+      activeMembers,
+      plots,
+      occupied,
+      dues,
+      openComplaints,
+      employees,
+      collection,
+      financialTrend,
+      plotStatus,
+      complaintStatus,
+      recentPayments,
+      openComplaintsList,
+      lowStock,
+    ] = await Promise.all([
+      this.count("members"),
+      this.count("members", `status = 'Active'`),
+      this.count("plots"),
+      this.count("plots", `"currentOwner" IS NOT NULL AND status IN (${occupiedStatuses})`),
+      this.sum("installments", "balance"),
+      this.count("complaints", `status IN (${openStatuses})`),
+      this.count("employees", `status IN ('Active', 'On Leave')`),
+      this.sum("payments", "amount", `status = 'Completed' AND to_char(date_trunc('month', "createdAt"), 'YYYY-MM') = '${monthPrefix}'`),
+      this.financialTrend(),
+      this.groupByStatus("plots"),
+      this.groupByStatus("complaints"),
+      this.recentPayments(6),
+      this.openComplaintsList(6),
+      this.lowStock(),
+    ]);
+
     return responseHeader("management", {
       stats: [
-        { key: "members", label: "Total Members", value: data.members.length, format: "number" },
-        { key: "activeMembers", label: "Active Members", value: data.members.filter((item) => item.status === "Active").length, format: "number" },
-        { key: "plots", label: "Total Plots", value: data.plots.length, format: "number" },
-        { key: "occupancy", label: "Occupancy Rate", value: data.plots.length ? Number(((occupied.length / data.plots.length) * 100).toFixed(1)) : 0, format: "percent" },
-        { key: "dues", label: "Outstanding Dues", value: sum(data.installments, "balance"), format: "currency" },
-        { key: "complaints", label: "Open Complaints", value: openComplaints.length, format: "number" },
-        { key: "employees", label: "Active Employees", value: data.employees.filter((item) => ["Active", "On Leave"].includes(item.status)).length, format: "number" },
-        { key: "collection", label: "Collected This Month", value: sum(data.payments.filter((item) => monthKey(item.createdAt) === monthKey(new Date()) && item.status === "Completed"), "amount"), format: "currency" },
+        { key: "members", label: "Total Members", value: members, format: "number" },
+        { key: "activeMembers", label: "Active Members", value: activeMembers, format: "number" },
+        { key: "plots", label: "Total Plots", value: plots, format: "number" },
+        { key: "occupancy", label: "Occupancy Rate", value: plots ? Number(((occupied / plots) * 100).toFixed(1)) : 0, format: "percent" },
+        { key: "dues", label: "Outstanding Dues", value: dues, format: "currency" },
+        { key: "complaints", label: "Open Complaints", value: openComplaints, format: "number" },
+        { key: "employees", label: "Active Employees", value: employees, format: "number" },
+        { key: "collection", label: "Collected This Month", value: collection, format: "currency" },
       ],
       charts: {
-        financialTrend: this.financialTrend(data),
-        plotStatus: groupCount(data.plots, "status", "label"),
-        complaintStatus: groupCount(data.complaints, "status", "label"),
+        financialTrend,
+        plotStatus,
+        complaintStatus,
       },
       lists: {
-        recentPayments: data.payments.slice(0, 6),
-        openComplaints: openComplaints.slice(0, 6),
+        recentPayments,
+        openComplaints: openComplaintsList,
       },
-      lowStock: this.lowStock(data.inventoryItems),
+      lowStock,
     });
   }
 
-  static finance(data) {
-    const defaulters = new Map();
-    data.installments.filter((item) => Number(item.balance || 0) > 0).forEach((item) => {
-      const current = defaulters.get(item.member) || { memberId: item.member, amount: 0, installments: 0 };
-      current.amount += Number(item.balance || 0);
-      current.installments += 1;
-      defaulters.set(item.member, current);
-    });
-    const memberNames = new Map(data.members.map((member) => [member._id, member.name]));
-    const dues = Array.from(defaulters.values()).map((item) => ({ ...item, memberName: memberNames.get(item.memberId) || "Unknown" })).sort((a, b) => b.amount - a.amount).slice(0, 8);
+  static async finance() {
+    const monthPrefix = now().toISOString().slice(0, 7);
+    const [
+      collected,
+      outstanding,
+      overdue,
+      expenses,
+      payments,
+      defaulterRows,
+      defaulterCountRows,
+      financialTrend,
+      duesStatusRows,
+      lowStock,
+    ] = await Promise.all([
+      this.sum("payments", "amount", `status = 'Completed' AND to_char(date_trunc('month', "createdAt"), 'YYYY-MM') = '${monthPrefix}'`),
+      this.sum("installments", "balance"),
+      this.sum("installments", "balance", `status = 'Overdue'`),
+      this.sum("expenses", "amount", `status = 'Paid'`),
+      this.count("payments", `status = 'Completed'`),
+      prisma.$queryRaw`
+        SELECT i.member AS "memberId",
+               m.name AS "memberName",
+               COALESCE(SUM(i.balance), 0)::float8 AS amount,
+               COUNT(*)::int AS installments
+        FROM installments i
+        LEFT JOIN members m ON m.id = i.member
+        WHERE i.balance > 0
+        GROUP BY i.member, m.name
+        ORDER BY amount DESC
+        LIMIT 8
+      `,
+      prisma.$queryRaw`
+        SELECT COUNT(DISTINCT member)::int AS count
+        FROM installments
+        WHERE balance > 0
+      `,
+      this.financialTrend(),
+      prisma.$queryRaw`
+        SELECT COALESCE(status, 'Unspecified') AS label,
+               COUNT(*)::int AS count
+        FROM installments
+        WHERE balance > 0
+        GROUP BY 1
+        ORDER BY 1
+      `,
+      this.lowStock(),
+    ]);
+
+    const dues = defaulterRows.map((r) => ({
+      memberId: r.memberId,
+      amount: toNumber(r.amount),
+      installments: toNumber(r.installments),
+      memberName: r.memberName || "Unknown",
+    }));
+
     return responseHeader("finance", {
       stats: [
-        { key: "collected", label: "Collected This Month", value: sum(data.payments.filter((item) => monthKey(item.createdAt) === monthKey(new Date()) && item.status === "Completed"), "amount"), format: "currency" },
-        { key: "outstanding", label: "Outstanding Dues", value: sum(data.installments, "balance"), format: "currency" },
-        { key: "overdue", label: "Overdue Dues", value: sum(data.installments.filter((item) => item.status === "Overdue"), "balance"), format: "currency" },
-        { key: "expenses", label: "Paid Expenses", value: sum(data.expenses.filter((item) => item.status === "Paid"), "amount"), format: "currency" },
-        { key: "payments", label: "Payment Count", value: data.payments.filter((item) => item.status === "Completed").length, format: "number" },
-        { key: "defaulters", label: "Defaulters", value: defaulters.size, format: "number" },
+        { key: "collected", label: "Collected This Month", value: collected, format: "currency" },
+        { key: "outstanding", label: "Outstanding Dues", value: outstanding, format: "currency" },
+        { key: "overdue", label: "Overdue Dues", value: overdue, format: "currency" },
+        { key: "expenses", label: "Paid Expenses", value: expenses, format: "currency" },
+        { key: "payments", label: "Payment Count", value: payments, format: "number" },
+        { key: "defaulters", label: "Defaulters", value: toNumber(defaulterCountRows[0]?.count), format: "number" },
       ],
       charts: {
-        financialTrend: this.financialTrend(data),
-        duesStatus: groupCount(data.installments.filter((item) => Number(item.balance || 0) > 0), "status", "label"),
+        financialTrend,
+        duesStatus: duesStatusRows.map((r) => ({ label: r.label, count: toNumber(r.count) })),
         defaulters: dues.map((item) => ({ label: item.memberName, amount: item.amount, value: item.amount })),
       },
       lists: { defaulters: dues },
-      lowStock: this.lowStock(data.inventoryItems),
+      lowStock,
     });
   }
 
-  static operations(data) {
-    const open = data.complaints.filter((item) => OPEN_STATUSES.includes(item.status));
+  static async operations() {
+    const openStatuses = sqlStringList(OPEN_STATUSES);
     const months = lastMonths();
-    const complaintTrend = months.map(({ key, label }) => ({ month: label, period: key, created: data.complaints.filter((item) => monthKey(item.createdAt) === key).length, resolved: data.complaints.filter((item) => monthKey(item.resolvedAt) === key).length }));
+    const start = monthStartUtc(5);
+
+    const [
+      openComplaints,
+      slaBreaches,
+      workOrders,
+      resolved,
+      assets,
+      staff,
+      complaintTrendCreated,
+      complaintTrendResolved,
+      complaintStatus,
+      workOrderStatus,
+      openComplaintsList,
+      openWorkOrders,
+      lowStock,
+    ] = await Promise.all([
+      this.count("complaints", `status IN (${openStatuses})`),
+      this.count("complaints", `status IN (${openStatuses}) AND "slaDueDate" IS NOT NULL AND "slaDueDate" < NOW()`),
+      this.count("work_orders", `status IN ('Open', 'InProgress')`),
+      this.count("complaints", `status IN ('Resolved', 'Closed')`),
+      this.count("assets"),
+      this.count("employees", `department IN ('Operations', 'Administration')`),
+      prisma.$queryRaw`
+        SELECT to_char(date_trunc('month', "createdAt"), 'YYYY-MM') AS period,
+               COUNT(*)::int AS count
+        FROM complaints
+        WHERE "createdAt" >= ${start}::timestamptz
+        GROUP BY 1
+      `,
+      prisma.$queryRaw`
+        SELECT to_char(date_trunc('month', "resolvedAt"), 'YYYY-MM') AS period,
+               COUNT(*)::int AS count
+        FROM complaints
+        WHERE "resolvedAt" >= ${start}::timestamptz
+        GROUP BY 1
+      `,
+      this.groupByStatus("complaints"),
+      this.groupByStatus("work_orders"),
+      this.openComplaintsList(8),
+      prisma.$queryRaw`
+        SELECT * FROM work_orders
+        WHERE status IN ('Open', 'InProgress')
+        ORDER BY "createdAt" DESC NULLS LAST, id DESC
+        LIMIT 8
+      `,
+      this.lowStock(),
+    ]);
+
+    const createdMap = new Map(complaintTrendCreated.map((r) => [r.period, toNumber(r.count)]));
+    const resolvedMap = new Map(complaintTrendResolved.map((r) => [r.period, toNumber(r.count)]));
+    const complaintTrend = months.map(({ key, label }) => ({
+      month: label,
+      period: key,
+      created: createdMap.get(key) || 0,
+      resolved: resolvedMap.get(key) || 0,
+    }));
+
     return responseHeader("operations", {
       stats: [
-        { key: "openComplaints", label: "Open Complaints", value: open.length, format: "number" },
-        { key: "overdue", label: "SLA Breaches", value: open.filter((item) => item.slaDueDate && new Date(item.slaDueDate) < new Date()).length, format: "number" },
-        { key: "workOrders", label: "Open Work Orders", value: data.workOrders.filter((item) => ["Open", "InProgress"].includes(item.status)).length, format: "number" },
-        { key: "resolved", label: "Resolved Complaints", value: data.complaints.filter((item) => ["Resolved", "Closed"].includes(item.status)).length, format: "number" },
-        { key: "assets", label: "Registered Assets", value: data.assets.length, format: "number" },
-        { key: "staff", label: "Operations Staff", value: data.employees.filter((item) => ["Operations", "Administration"].includes(item.department)).length, format: "number" },
+        { key: "openComplaints", label: "Open Complaints", value: openComplaints, format: "number" },
+        { key: "overdue", label: "SLA Breaches", value: slaBreaches, format: "number" },
+        { key: "workOrders", label: "Open Work Orders", value: workOrders, format: "number" },
+        { key: "resolved", label: "Resolved Complaints", value: resolved, format: "number" },
+        { key: "assets", label: "Registered Assets", value: assets, format: "number" },
+        { key: "staff", label: "Operations Staff", value: staff, format: "number" },
       ],
       charts: {
         complaintTrend,
-        complaintStatus: groupCount(data.complaints, "status", "label"),
-        workOrderStatus: groupCount(data.workOrders, "status", "label"),
+        complaintStatus,
+        workOrderStatus,
       },
-      lists: { openComplaints: open.slice(0, 8), workOrders: data.workOrders.filter((item) => ["Open", "InProgress"].includes(item.status)).slice(0, 8) },
-      lowStock: this.lowStock(data.inventoryItems),
+      lists: {
+        openComplaints: openComplaintsList,
+        workOrders: toDocs(openWorkOrders),
+      },
+      lowStock,
     });
   }
 
-  static security(data) {
+  static async security() {
     const days = lastDays();
-    const visitorTrend = days.map(({ key, label }) => ({ day: label, date: key, entries: data.visitorEntries.filter((item) => dateKey(item.entryTime) === key).length, active: data.visitorEntries.filter((item) => dateKey(item.entryTime) === key && !item.exitTime).length }));
+    const start = dayStartUtc(6);
+    const today = now().toISOString().slice(0, 10);
+
+    const [
+      visitorsToday,
+      activeVisitors,
+      vehicles,
+      blockedVehicles,
+      guards,
+      passes,
+      visitorTrendRows,
+      gateBreakdown,
+      vehicleTypes,
+      recentVisitors,
+      expiringPasses,
+    ] = await Promise.all([
+      this.count("visitor_entries", `to_char(date_trunc('day', "entryTime"), 'YYYY-MM-DD') = '${today}'`),
+      this.count("visitor_entries", `"exitTime" IS NULL`),
+      this.count("vehicles"),
+      this.count("vehicles", `status = 'Blocked'`),
+      this.count("guards", `status = 'Active'`),
+      this.count("passes", `status = 'Active'`),
+      prisma.$queryRaw`
+        SELECT to_char(date_trunc('day', "entryTime"), 'YYYY-MM-DD') AS day,
+               COUNT(*)::int AS entries,
+               COUNT(*) FILTER (WHERE "exitTime" IS NULL)::int AS active
+        FROM visitor_entries
+        WHERE "entryTime" >= ${start}::timestamptz
+        GROUP BY 1
+      `,
+      prisma.$queryRaw`
+        SELECT COALESCE(gate, 'Unspecified') AS label,
+               COUNT(*)::int AS count
+        FROM visitor_entries
+        GROUP BY 1
+        ORDER BY 1
+      `,
+      this.groupByStatus("vehicles", "type"),
+      prisma.$queryRaw`
+        SELECT * FROM visitor_entries
+        ORDER BY "entryTime" DESC NULLS LAST, id DESC
+        LIMIT 8
+      `,
+      prisma.$queryRaw`
+        SELECT * FROM passes
+        WHERE status = 'Active'
+        ORDER BY "createdAt" DESC NULLS LAST, id DESC
+        LIMIT 8
+      `,
+    ]);
+
+    const trendMap = new Map(visitorTrendRows.map((r) => [r.day, { entries: toNumber(r.entries), active: toNumber(r.active) }]));
+    const visitorTrend = days.map(({ key, label }) => ({
+      day: label,
+      date: key,
+      entries: trendMap.get(key)?.entries || 0,
+      active: trendMap.get(key)?.active || 0,
+    }));
+
     return responseHeader("security", {
       stats: [
-        { key: "visitorsToday", label: "Visitors Today", value: data.visitorEntries.filter((item) => dateKey(item.entryTime) === dateKey(new Date())).length, format: "number" },
-        { key: "activeVisitors", label: "Visitors On Site", value: data.visitorEntries.filter((item) => !item.exitTime).length, format: "number" },
-        { key: "vehicles", label: "Registered Vehicles", value: data.vehicles.length, format: "number" },
-        { key: "blockedVehicles", label: "Blocked Vehicles", value: data.vehicles.filter((item) => item.status === "Blocked").length, format: "number" },
-        { key: "guards", label: "Active Guards", value: data.guards.filter((item) => item.status === "Active").length, format: "number" },
-        { key: "passes", label: "Active Passes", value: data.passes.filter((item) => item.status === "Active").length, format: "number" },
+        { key: "visitorsToday", label: "Visitors Today", value: visitorsToday, format: "number" },
+        { key: "activeVisitors", label: "Visitors On Site", value: activeVisitors, format: "number" },
+        { key: "vehicles", label: "Registered Vehicles", value: vehicles, format: "number" },
+        { key: "blockedVehicles", label: "Blocked Vehicles", value: blockedVehicles, format: "number" },
+        { key: "guards", label: "Active Guards", value: guards, format: "number" },
+        { key: "passes", label: "Active Passes", value: passes, format: "number" },
       ],
       charts: {
         visitorTrend,
-        gateBreakdown: groupCount(data.visitorEntries, "gate", "label"),
-        vehicleTypes: groupCount(data.vehicles, "type", "label"),
+        gateBreakdown: gateBreakdown.map((r) => ({ label: r.label, count: toNumber(r.count) })),
+        vehicleTypes,
       },
-      lists: { recentVisitors: data.visitorEntries.slice(0, 8), expiringPasses: data.passes.filter((item) => item.status === "Active").slice(0, 8) },
+      lists: {
+        recentVisitors: toDocs(recentVisitors),
+        expiringPasses: toDocs(expiringPasses),
+      },
     });
   }
 
-  static property(data) {
-    const blocks = new Map();
-    const blockNames = new Map((data.blocks || []).map((block) => [block._id, block.name]));
-    data.plots.forEach((plot) => {
-      const key = blockNames.get(plot.block) || "Unassigned";
-      const current = blocks.get(key) || { block: key, total: 0, occupied: 0, available: 0 };
-      current.total += 1;
-      if (plot.currentOwner) current.occupied += 1;
-      if (plot.status === Plot.STATUS.AVAILABLE) current.available += 1;
-      blocks.set(key, current);
-    });
+  static async property() {
+    const [
+      totalPlots,
+      occupied,
+      available,
+      possessionPending,
+      transfersPending,
+      nocsPending,
+      plotStatus,
+      blockOccupancyRows,
+      booked,
+      constructionActive,
+      recentTransfers,
+      recentNocs,
+      lowStock,
+    ] = await Promise.all([
+      this.count("plots"),
+      this.count("plots", `"currentOwner" IS NOT NULL`),
+      this.count("plots", `status = '${Plot.STATUS.AVAILABLE}'`),
+      this.count("possession_applications", `status NOT IN ('Possessed', 'Rejected')`),
+      this.count("transfer_requests", `status NOT IN ('Completed', 'Rejected')`),
+      this.count("noc_applications", `status <> 'Issued'`),
+      this.groupByStatus("plots"),
+      prisma.$queryRaw`
+        SELECT COALESCE(b.name, 'Unassigned') AS block,
+               COUNT(*)::int AS total,
+               COUNT(*) FILTER (WHERE p."currentOwner" IS NOT NULL)::int AS occupied,
+               COUNT(*) FILTER (WHERE p.status = 'Available')::int AS available
+        FROM plots p
+        LEFT JOIN blocks b ON b.id = p.block
+        GROUP BY 1
+        ORDER BY 1
+      `,
+      this.count("plots", `status = '${Plot.STATUS.BOOKED}'`),
+      this.count("construction_applications", `status <> 'Rejected'`),
+      prisma.$queryRaw`
+        SELECT * FROM transfer_requests
+        ORDER BY "createdAt" DESC NULLS LAST, id DESC
+        LIMIT 8
+      `,
+      prisma.$queryRaw`
+        SELECT * FROM noc_applications
+        ORDER BY "createdAt" DESC NULLS LAST, id DESC
+        LIMIT 8
+      `,
+      this.lowStock(),
+    ]);
+
     const pipeline = [
-      { stage: "Bookings", value: data.plots.filter((item) => item.status === Plot.STATUS.BOOKED).length },
-      { stage: "Possession", value: data.possessionApplications.filter((item) => !["Possessed", "Rejected"].includes(item.status)).length },
-      { stage: "NOCs", value: data.nocApplications.filter((item) => item.status !== "Issued").length },
-      { stage: "Transfers", value: data.transferRequests.filter((item) => !["Completed", "Rejected"].includes(item.status)).length },
-      { stage: "Construction", value: data.constructionApplications.filter((item) => item.status !== "Rejected").length },
+      { stage: "Bookings", value: booked },
+      { stage: "Possession", value: possessionPending },
+      { stage: "NOCs", value: nocsPending },
+      { stage: "Transfers", value: transfersPending },
+      { stage: "Construction", value: constructionActive },
     ];
+
+    const blockOccupancy = blockOccupancyRows.map((item) => {
+      const total = toNumber(item.total);
+      const occ = toNumber(item.occupied);
+      return {
+        block: item.block,
+        total,
+        occupied: occ,
+        available: toNumber(item.available),
+        occupancyRate: total ? Number(((occ / total) * 100).toFixed(1)) : 0,
+      };
+    });
+
     return responseHeader("property", {
       stats: [
-        { key: "totalPlots", label: "Total Plots", value: data.plots.length, format: "number" },
-        { key: "occupied", label: "Occupied Plots", value: data.plots.filter((item) => item.currentOwner).length, format: "number" },
-        { key: "available", label: "Available Plots", value: data.plots.filter((item) => item.status === Plot.STATUS.AVAILABLE).length, format: "number" },
-        { key: "possession", label: "Possession Pending", value: pipeline[1].value, format: "number" },
-        { key: "transfers", label: "Transfers Pending", value: pipeline[3].value, format: "number" },
-        { key: "nocs", label: "NOCs Pending", value: pipeline[2].value, format: "number" },
+        { key: "totalPlots", label: "Total Plots", value: totalPlots, format: "number" },
+        { key: "occupied", label: "Occupied Plots", value: occupied, format: "number" },
+        { key: "available", label: "Available Plots", value: available, format: "number" },
+        { key: "possession", label: "Possession Pending", value: possessionPending, format: "number" },
+        { key: "transfers", label: "Transfers Pending", value: transfersPending, format: "number" },
+        { key: "nocs", label: "NOCs Pending", value: nocsPending, format: "number" },
       ],
       charts: {
-        plotStatus: groupCount(data.plots, "status", "label"),
-        blockOccupancy: Array.from(blocks.values()).map((item) => ({ ...item, occupancyRate: item.total ? Number(((item.occupied / item.total) * 100).toFixed(1)) : 0 })),
+        plotStatus,
+        blockOccupancy,
         workflow: pipeline,
       },
-      lists: { recentTransfers: data.transferRequests.slice(0, 8), recentNocs: data.nocApplications.slice(0, 8) },
-      lowStock: this.lowStock(data.inventoryItems),
+      lists: {
+        recentTransfers: toDocs(recentTransfers),
+        recentNocs: toDocs(recentNocs),
+      },
+      lowStock,
     });
   }
 
   static async get(type) {
-    const data = await this.loadData();
-    if (type === "management") return this.management(data);
-    if (type === "finance") return this.finance(data);
-    if (type === "operations") return this.operations(data);
-    if (type === "security") return this.security(data);
-    if (type === "property") return this.property(data);
-    const ApiError = require("../../utils/ApiError");
-    throw new ApiError(404, "Dashboard type not found");
+    const cached = cache.get(type);
+    if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.value;
+
+    let value;
+    if (type === "management") value = await this.management();
+    else if (type === "finance") value = await this.finance();
+    else if (type === "operations") value = await this.operations();
+    else if (type === "security") value = await this.security();
+    else if (type === "property") value = await this.property();
+    else {
+      const ApiError = require("../../utils/ApiError");
+      throw new ApiError(404, "Dashboard type not found");
+    }
+
+    cache.set(type, { at: Date.now(), value });
+    return value;
   }
 }
 

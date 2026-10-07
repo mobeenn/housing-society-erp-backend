@@ -39,7 +39,23 @@ class PaymentService {
       return saved;
     } catch (error) { await session.abortTransaction(); await session.endSession(); throw error instanceof ApiError ? error : new ApiError(409, error.message); }
   }
-  static async list({ member, plot, status, page = 1, limit = 20 }) { const query = {}; if (member) query.member = member; if (plot) query.plot = plot; if (status) query.status = status; const all = await Payment.find(query, { sort: { createdAt: -1 } }); const p = Number(page) || 1; const l = Number(limit) || 20; return { data: await Promise.all(all.slice((p - 1) * l, p * l).map(enrichPayment)), pagination: { page: p, limit: l, total: all.length, pages: Math.ceil(all.length / l) } }; }
+  static async list({ member, plot, status, page = 1, limit = 20 }) {
+    const query = {};
+    if (member) query.member = member;
+    if (plot) query.plot = plot;
+    if (status) query.status = status;
+    const p = Math.max(1, Number(page) || 1);
+    const l = Math.max(1, Number(limit) || 20);
+    const skip = (p - 1) * l;
+    const [rows, total] = await Promise.all([
+      Payment.find(query, { skip, limit: l, sort: { createdAt: -1 } }),
+      db.collection(Payment.collectionName).countDocuments(query),
+    ]);
+    return {
+      data: await Promise.all(rows.map(enrichPayment)),
+      pagination: { page: p, limit: l, total, pages: Math.ceil(total / l) },
+    };
+  }
   static async getById(id) { const payment = await Payment.findById(id); if (!payment) throw new ApiError(404, "Payment not found"); return enrichPayment(payment); }
   static async statement(memberId) {
     if (!(await Member.findById(memberId))) throw new ApiError(404, "Member not found");

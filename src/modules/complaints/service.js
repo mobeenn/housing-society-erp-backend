@@ -71,12 +71,16 @@ class ComplaintService {
     if (status) query.status = status;
     if (priority) query.priority = priority;
     if (category) query.category = category;
-    const all = await Complaint.find(query, { sort: { createdAt: -1 } });
-    const p = Number(page) || 1;
-    const l = Number(limit) || 20;
+    const p = Math.max(1, Number(page) || 1);
+    const l = Math.max(1, Number(limit) || 20);
+    const skip = (p - 1) * l;
+    const [rows, total] = await Promise.all([
+      Complaint.find(query, { skip, limit: l, sort: { createdAt: -1 } }),
+      Complaint.countDocuments(query),
+    ]);
     return {
-      data: await Promise.all(all.slice((p - 1) * l, p * l).map((c) => this.enrich(c))),
-      pagination: { page: p, limit: l, total: all.length, pages: Math.ceil(all.length / l) },
+      data: await Promise.all(rows.map((c) => this.enrich(c))),
+      pagination: { page: p, limit: l, total, pages: Math.ceil(total / l) },
     };
   }
 
