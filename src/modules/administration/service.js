@@ -27,6 +27,8 @@ class AdministrationService {
         subDealerOverrideRate: null,
         recoveryAutoBlockThreshold: 49,
         recoveryAllowSelfReserve: false,
+        enforceSeparationOfDuties: true,
+        requireBookingApproval: true,
         contactInfo: {},
         updatedById: null,
         createdAt: new Date(),
@@ -54,6 +56,8 @@ class AdministrationService {
         subDealerOverrideRate: data.subDealerOverrideRate || null,
         recoveryAutoBlockThreshold: data.recoveryAutoBlockThreshold || 49,
         recoveryAllowSelfReserve: data.recoveryAllowSelfReserve || false,
+        enforceSeparationOfDuties: data.enforceSeparationOfDuties !== false,
+        requireBookingApproval: data.requireBookingApproval !== false,
         contactInfo: data.contactInfo || {},
         updatedById: req.user?.id || null,
       },
@@ -68,6 +72,8 @@ class AdministrationService {
         subDealerOverrideRate: data.subDealerOverrideRate,
         recoveryAutoBlockThreshold: data.recoveryAutoBlockThreshold,
         recoveryAllowSelfReserve: data.recoveryAllowSelfReserve,
+        enforceSeparationOfDuties: data.enforceSeparationOfDuties,
+        requireBookingApproval: data.requireBookingApproval,
         contactInfo: data.contactInfo,
         updatedById: req.user?.id || null,
       },
@@ -303,6 +309,65 @@ class AdministrationService {
         limit: parseInt(limit, 10),
         total,
         pages: Math.ceil(total / limit),
+      },
+    };
+  }
+
+  /** First-run checklist for Society Admin (P4-5). */
+  static async getSetupStatus() {
+    const { db } = require("../../config/db");
+    const SocietySettings = require("./societySettings.model");
+    const NumberingRule = require("./numberingRule.model");
+    const { Block, Street } = require("./masterData.model");
+    const User = require("../auth/user.model");
+    const RbacService = require("../rbac/service");
+
+    const settings = await SocietySettings.get();
+    const name = String(settings.name || "").trim();
+    const placeholderName = !name || name.toLowerCase() === "housing society";
+    const hasAddress = Boolean(
+      settings.address?.city || settings.address?.street || settings.contactInfo?.phone || settings.contactInfo?.email
+    );
+    const profileDone = !placeholderName && hasAddress;
+
+    const [blocks, streets, rules, users, memberCount, plotCount] = await Promise.all([
+      Block.find({ isActive: true }, { limit: 1 }),
+      Street.find({ isActive: true }, { limit: 1 }),
+      NumberingRule.find({}, { limit: 1 }),
+      User.find({}, { limit: 50 }),
+      db.collection("members").countDocuments({}),
+      db.collection("plots").countDocuments({}),
+    ]);
+
+    let staffDone = false;
+    for (const user of users || []) {
+      const populated = await User.populate({ ...user }, "roles");
+      if (!RbacService.isSuperAdmin(populated)) {
+        staffDone = true;
+        break;
+      }
+    }
+
+    const recoveryDone =
+      Number.isFinite(Number(settings.recoveryAutoBlockThreshold)) &&
+      settings.feeSettings != null;
+
+    const steps = [
+      { id: "profile", label: "Society profile", done: profileDone, href: "/settings/profile" },
+      { id: "blocks", label: "Blocks & streets", done: (blocks || []).length > 0 && (streets || []).length > 0, href: "/settings/master-data" },
+      { id: "numbering", label: "Numbering rules", done: (rules || []).length > 0, href: "/settings/numbering-rules" },
+      { id: "recovery", label: "Penalty / recovery settings", done: recoveryDone, href: "/settings/profile" },
+      { id: "staff", label: "Create staff users", done: staffDone, href: "/admin/users/new" },
+      { id: "import", label: "Import members / plots", done: Number(memberCount) > 0 && Number(plotCount) > 0, href: "/settings/import" },
+    ];
+
+    return {
+      complete: steps.every((step) => step.done),
+      steps,
+      counts: {
+        members: Number(memberCount) || 0,
+        plots: Number(plotCount) || 0,
+        staffUsers: (users || []).length,
       },
     };
   }

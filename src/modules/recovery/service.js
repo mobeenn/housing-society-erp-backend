@@ -202,7 +202,9 @@ class RecoveryService {
   }
 
   static async isSupervisor(user) {
-    return RbacService.isSuperAdmin(user) || await RbacService.isAllowed(user, "recovery", "create");
+    return RbacService.isSuperAdmin(user)
+      || await RbacService.isAllowed(user, "recovery", "create")
+      || await RbacService.isAllowed(user, "recovery", "approve");
   }
 
   static async getAssignmentForUser(id, user) {
@@ -319,6 +321,9 @@ class RecoveryService {
   }
 
   static async reassign(id, agentId, req) {
+    if (!(await this.isSupervisor(req.user))) {
+      throw new ApiError(403, "Only a recovery supervisor can reassign plots");
+    }
     const assignment = await RecoveryAssignment.findById(id);
     if (!assignment) throw new ApiError(404, "Recovery assignment not found");
     if (![RecoveryAssignment.STATUS.ASSIGNED, RecoveryAssignment.STATUS.IN_PROGRESS].includes(assignment.status)) {
@@ -570,9 +575,10 @@ class RecoveryService {
         results.push({ bookingId, sent: false, reason: "No overdue member record" });
         continue;
       }
+      const reminderMessage = `Your booking ${summary.bookingRef?._id || bookingId} has an overdue balance of PKR ${number(summary.outstandingAmount).toLocaleString()}. Please contact the society office to arrange payment.`;
       const notification = await NotificationService.safeNotifyMember(summary.member._id, {
         title: "Overdue installment reminder",
-        message: `Your booking ${summary.bookingRef?._id || bookingId} has an overdue balance of PKR ${number(summary.outstandingAmount).toLocaleString()}. Please contact the society office to arrange payment.`,
+        message: reminderMessage,
         relatedEntityType: "Booking",
         relatedEntityId: bookingId,
         eventType: "recovery.reminder",
@@ -580,6 +586,16 @@ class RecoveryService {
         metadata: { outstandingAmount: summary.outstandingAmount, overdueDays: summary.daysOverdue },
         createdBy: req.user._id,
       });
+      // Non-blocking email when the member has an email address.
+      if (summary.member.email) {
+        NotificationService.dispatchStubChannels({
+          recipient: summary.member.email,
+          subject: "Overdue installment reminder",
+          message: reminderMessage,
+          channels: ["email"],
+          metadata: { bookingId, eventType: "recovery.reminder" },
+        }).catch((err) => console.warn("[recovery.email]", err.message));
+      }
       results.push({ bookingId, sent: Boolean(notification), notificationId: notification?._id || null });
     }
     return { data: results, sent: results.filter((item) => item.sent).length };

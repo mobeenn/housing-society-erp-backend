@@ -8,7 +8,7 @@ class UserService {
   /**
    * Get all users with pagination, search, and sorting.
    */
-  static async getAll(queryParams = {}) {
+  static async getAll(queryParams = {}, { hideSuperAdmin = false } = {}) {
     const {
       search = "",
       isActive,
@@ -44,6 +44,13 @@ class UserService {
     // Filter by role
     if (roleId) {
       where.userRoles = { some: { roleId } };
+    }
+
+    // Hide Super Admin accounts from non–Super-Admin callers (P2-3).
+    if (hideSuperAdmin) {
+      where.NOT = {
+        userRoles: { some: { role: { name: "Super Admin" } } },
+      };
     }
 
     // Build orderBy
@@ -122,6 +129,12 @@ class UserService {
     });
     if (!role) {
       throw new ApiError(400, "Invalid role");
+    }
+    if (role.name === "Super Admin") {
+      throw new ApiError(400, "Super Admin cannot be assigned through the users UI");
+    }
+    if (role.isActive === false) {
+      throw new ApiError(400, "Cannot assign an inactive role");
     }
 
     const passwordHash = await bcrypt.hash(password, 10);

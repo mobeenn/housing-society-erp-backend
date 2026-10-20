@@ -109,6 +109,7 @@ enum PossessionStatus {
   UnderVerification
   Approved
   Possessed
+  Rejected
 }
 
 enum BuyBackStatus {
@@ -418,17 +419,35 @@ model User {
   passwordHash       String?
   isActive           Boolean   @default(true)
   mustResetPassword  Boolean   @default(false)
+  /// Bumped on password reset so existing refresh JWTs stop working.
+  tokenVersion       Int       @default(0)
   lastLoginAt        DateTime?
   createdById        String?
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
-  createdBy    User?     @relation("UserCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  createdUsers User[]    @relation("UserCreatedBy")
-  userRoles    UserRole[]
-  auditLogs    AuditLog[]
+  createdBy            User?                 @relation("UserCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdUsers         User[]                @relation("UserCreatedBy")
+  userRoles            UserRole[]
+  auditLogs            AuditLog[]
+  passwordResetTokens  PasswordResetToken[]
 
   @@map("users")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tokenHash])
+  @@index([userId])
+  @@map("password_reset_tokens")
 }
 
 model Role {
@@ -438,6 +457,7 @@ model Role {
   permissions  String[] @default([])
   isSystemRole Boolean  @default(false)
   isSystem     Boolean  @default(false)
+  isActive     Boolean  @default(true)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -569,7 +589,10 @@ model SocietySettings {
   subDealerOverrideRate     Decimal? @db.Decimal(14, 2)
   recoveryAutoBlockThreshold Int      @default(49)
   recoveryAllowSelfReserve  Boolean  @default(false)
+  enforceSeparationOfDuties Boolean  @default(true)
+  requireBookingApproval    Boolean  @default(true)
   contactInfo               Json     @default("{}")
+
   updatedById               String?
   createdAt                 DateTime @default(now())
   updatedAt                 DateTime @updatedAt
@@ -713,6 +736,9 @@ model Member {
   createdAt         DateTime?
   updatedAt         DateTime?
 
+  bookingsAsMember     Booking[]     @relation("BookingMember")
+  installmentsAsMember Installment[] @relation("InstallmentMember")
+
   @@index([cnic])
   @@index([memberId])
   @@index([status])
@@ -739,6 +765,8 @@ model Plot {
   createdBy    String?
   createdAt    DateTime?
   updatedAt    DateTime?
+
+  bookingsAsPlot Booking[] @relation("BookingPlot")
 
   @@index([plotNumber])
   @@index([currentOwner])
@@ -787,6 +815,9 @@ model Booking {
   createdAt           DateTime?
   updatedAt           DateTime?
 
+  memberRef Member @relation("BookingMember", fields: [member], references: [id], onDelete: Restrict)
+  plotRef   Plot   @relation("BookingPlot", fields: [plot], references: [id], onDelete: Restrict)
+
   @@index([member])
   @@index([plot])
   @@index([status])
@@ -803,6 +834,8 @@ model InstallmentPlan {
   generatedInstallments Json?
   createdAt             DateTime?
   updatedAt             DateTime?
+
+  installments Installment[] @relation("InstallmentPlanInstallments")
 
   @@index([booking])
   @@map("installment_plans")
@@ -823,6 +856,9 @@ model Installment {
   overdueDays    Int?
   createdAt      DateTime?
   updatedAt      DateTime?
+
+  planRef   InstallmentPlan? @relation("InstallmentPlanInstallments", fields: [plan], references: [id], onDelete: SetNull)
+  memberRef Member?          @relation("InstallmentMember", fields: [member], references: [id], onDelete: SetNull)
 
   @@index([member])
   @@index([plot])
@@ -1437,6 +1473,7 @@ model Notice {
   expiryDate      DateTime?
   status          String?
   publishedAt     DateTime?
+  sendEmail       Boolean?  @default(false)
   createdBy       String?
   createdAt       DateTime?
   updatedAt       DateTime?

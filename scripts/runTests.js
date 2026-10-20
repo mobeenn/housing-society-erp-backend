@@ -67,6 +67,10 @@ function runNode(script, extraEnv) {
 }
 
 async function main() {
+  // Parent process must stay on NODE_ENV=test for the whole run (schema reset + seed).
+  process.env.NODE_ENV = "test";
+  assertNotProduction();
+
   const testUrl = withSchema(env.DATABASE_URL, TEST_SCHEMA);
   const testDirectUrl = withSchema(env.DIRECT_URL || env.DATABASE_URL, TEST_SCHEMA);
   const testEnv = {
@@ -123,11 +127,7 @@ async function main() {
   process.exitCode = testResult.status ?? 1;
 }
 
-main()
-  .catch((error) => {
-    console.error(`\nTest run failed: ${error.message}`);
-    process.exitCode = 1;
-  })
-  .finally(() => {
-    assertNotProduction();
-  });
+main().catch((error) => {
+  console.error(`\nTest run failed: ${error.message}`);
+  process.exitCode = 1;
+});

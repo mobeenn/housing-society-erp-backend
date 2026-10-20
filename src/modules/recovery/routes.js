@@ -1,5 +1,6 @@
 const express = require("express");
 const { authenticate, authorize } = require("../../middlewares/auth");
+const cronAuth = require("../../middlewares/cronAuth");
 const validate = require("../../middlewares/validate");
 const {
   assignRecoverySchema,
@@ -8,6 +9,10 @@ const {
 const controller = require("./controller");
 
 const router = express.Router();
+
+// Vercel Cron / external scheduler (no JWT — Bearer CRON_SECRET only)
+router.get("/cron/auto-block", cronAuth, controller.runAutoBlockCron);
+
 router.use(authenticate);
 
 router.get("/config", authorize("recovery", "view"), controller.getConfig);

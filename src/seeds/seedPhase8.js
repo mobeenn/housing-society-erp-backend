@@ -20,8 +20,15 @@ const permissionPlan = {
   "Security Manager": [PERMISSIONS.SECURITY_VIEW, PERMISSIONS.SECURITY_CREATE, PERMISSIONS.SECURITY_EDIT, PERMISSIONS.SECURITY_MANAGE, PERMISSIONS.VISITORS_VIEW, PERMISSIONS.VISITORS_CREATE, PERMISSIONS.VEHICLES_VIEW],
   "Security Guard": [PERMISSIONS.SECURITY_VIEW, PERMISSIONS.VISITORS_VIEW, PERMISSIONS.VISITORS_CREATE, PERMISSIONS.VEHICLES_VIEW],
   "HR Officer": [PERMISSIONS.NOTICES_CREATE],
-  "Store Manager": [PERMISSIONS.INVENTORY_VIEW, PERMISSIONS.INVENTORY_CREATE, PERMISSIONS.INVENTORY_EDIT, PERMISSIONS.NOTICES_CREATE],
-  "Procurement Officer": [PERMISSIONS.INVENTORY_VIEW, PERMISSIONS.NOTICES_CREATE],
+  "Store & Procurement Officer": [
+    PERMISSIONS.INVENTORY_VIEW,
+    PERMISSIONS.INVENTORY_CREATE,
+    PERMISSIONS.INVENTORY_EDIT,
+    PERMISSIONS.PROCUREMENT_VIEW,
+    PERMISSIONS.PROCUREMENT_CREATE,
+    PERMISSIONS.PROCUREMENT_EDIT,
+    PERMISSIONS.NOTICES_CREATE,
+  ],
   Receptionist: [PERMISSIONS.SECURITY_VIEW, PERMISSIONS.VISITORS_VIEW, PERMISSIONS.VISITORS_CREATE],
   Auditor: [PERMISSIONS.AUDIT_VIEW],
 };
@@ -51,7 +58,11 @@ async function upsertUser({ id, name, email, roleId, memberId = null, passwordHa
 }
 
 async function seed() {
-  if (env.isProd) throw new Error("Phase 8 development seed cannot run in production");
+  if (env.isProd && process.env.ALLOW_DEMO_SEED !== "true") {
+    throw new Error(
+      "Phase 8 development seed cannot run in production. Set ALLOW_DEMO_SEED=true to override.",
+    );
+  }
   await connectDB();
 
   const roles = await db.collection("roles").find({});
@@ -75,8 +86,7 @@ async function seed() {
     ["Security Manager", "security.demo@housing.local", "Security Demo User"],
     ["Property Officer", "property.demo@housing.local", "Property Demo User"],
     ["HR Officer", "hr.demo@housing.local", "HR Demo User"],
-    ["Store Manager", "store.demo@housing.local", "Store Demo User"],
-    ["Procurement Officer", "procurement.demo@housing.local", "Procurement Demo User"],
+    ["Store & Procurement Officer", "store.demo@housing.local", "Store Demo User"],
     ["Receptionist", "receptionist.demo@housing.local", "Receptionist Demo User"],
   ];
 

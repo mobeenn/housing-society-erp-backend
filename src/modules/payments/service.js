@@ -9,6 +9,7 @@ const { createAuditLog, AuditLog } = require("../administration/auditLog.model")
 const ApiError = require("../../utils/ApiError");
 const NotificationService = require("../notifications/service");
 const InvoiceService = require("../invoices/service");
+const { assertSeparationOfDuties } = require("../../utils/separationOfDuties");
 
 const getPenaltyRule = async () => (await SocietySettings.get()).feeSettings?.penaltyRule || { type: "flat", amount: 0, period: "day", graceDays: 0 };
 const enrichPayment = async (payment) => payment ? { ...payment, memberRef: await Member.findById(payment.member), plotRef: payment.plot ? await Plot.findById(payment.plot) : null } : null;
@@ -19,14 +20,47 @@ class PaymentService {
   static async create(data, req) {
     if (!(await Member.findById(data.member))) throw new ApiError(400, "Member not found");
     if (data.plot && !(await Plot.findById(data.plot))) throw new ApiError(400, "Plot not found");
-    const session = await db.startSession(); session.startTransaction();
+
+    let payment = null;
+    const previousInstallments = [];
     try {
-      const allocation = allocatePayment({ installments: await this.getInstallments(data.member, data.plot), paymentAmount: data.amount, penaltyRule: await getPenaltyRule() });
-      const payment = await Payment.create({ member: data.member, plot: data.plot || null, amount: Number(data.amount), method: data.method, allocations: allocation.allocations, collectedBy: req.user._id, remarks: data.remarks || null });
+      const allocation = allocatePayment({
+        installments: await this.getInstallments(data.member, data.plot),
+        paymentAmount: data.amount,
+        penaltyRule: await getPenaltyRule(),
+      });
+      for (const update of allocation.updates) {
+        const before = await Installment.findById(update.id);
+        if (before) {
+          previousInstallments.push({
+            id: before._id,
+            paidAmount: before.paidAmount,
+            balance: before.balance,
+            penaltyAmount: before.penaltyAmount,
+            overdueDays: before.overdueDays,
+            status: before.status,
+          });
+        }
+      }
+      payment = await Payment.create({
+        member: data.member,
+        plot: data.plot || null,
+        amount: Number(data.amount),
+        method: data.method,
+        allocations: allocation.allocations,
+        collectedBy: req.user._id,
+        remarks: data.remarks || null,
+      });
       for (const update of allocation.updates) await Installment.update(update.id, update);
-      await session.commitTransaction(); await session.endSession();
+
       const saved = await enrichPayment(await Payment.findById(payment._id));
-      await createAuditLog({ req, entityType: "Payment", entityId: payment._id, action: AuditLog.ACTIONS.CREATE, changes: { after: saved } });
+      await createAuditLog({
+        req,
+        entityType: "Payment",
+        entityId: payment._id,
+        action: AuditLog.ACTIONS.CREATE,
+        changes: { after: saved },
+      });
       await NotificationService.safeNotifyMember(data.member, {
         title: "Payment received",
         message: `Payment of PKR ${Number(data.amount).toLocaleString()} was received. Receipt ${payment.receiptNumber}.`,
@@ -35,9 +69,33 @@ class PaymentService {
         eventType: "payment.received",
         eventKey: `payment-received:${payment._id}`,
       });
-      await InvoiceService.safeRegisterInvoice("Installment", saved, { fileUrl: `/api/payments/${payment._id}/receipt.pdf` });
+      await InvoiceService.safeRegisterInvoice("Installment", saved, {
+        fileUrl: `/api/payments/${payment._id}/receipt.pdf`,
+      });
       return saved;
-    } catch (error) { await session.abortTransaction(); await session.endSession(); throw error instanceof ApiError ? error : new ApiError(409, error.message); }
+    } catch (error) {
+      if (payment?._id) {
+        try {
+          await db.collection(Payment.collectionName).deleteOne({ _id: payment._id });
+        } catch {
+          /* best-effort rollback */
+        }
+        for (const before of previousInstallments) {
+          try {
+            await Installment.update(before.id, {
+              paidAmount: before.paidAmount,
+              balance: before.balance,
+              penaltyAmount: before.penaltyAmount,
+              overdueDays: before.overdueDays,
+              status: before.status,
+            });
+          } catch {
+            /* best-effort rollback */
+          }
+        }
+      }
+      throw error instanceof ApiError ? error : new ApiError(409, error.message);
+    }
   }
   static async list({ member, plot, status, page = 1, limit = 20 }) {
     const query = {};
@@ -66,7 +124,26 @@ class PaymentService {
     return { charges, payments: await Promise.all(payments.map(enrichPayment)), ledger, totalCharges: charges.reduce((sum, item) => sum + item.debit, 0), totalPayments: credits.reduce((sum, item) => sum + item.credit, 0), balance: runningTotal };
   }
   static async createRefund(data, req) { const refund = await Refund.create({ ...data, amount: Number(data.amount), createdBy: req.user._id }); await createAuditLog({ req, entityType: "Refund", entityId: refund._id, action: AuditLog.ACTIONS.CREATE, changes: { after: refund } }); return refund; }
-  static async listRefunds() { return Refund.find({}, { sort: { createdAt: -1 } }); }
-  static async updateRefund(id, action, req) { const refund = await Refund.findById(id); if (!refund) throw new ApiError(404, "Refund not found"); const transitions = { approve: [Refund.STATUS.PENDING, { status: Refund.STATUS.APPROVED, approvedBy: req.user._id }], reject: [Refund.STATUS.PENDING, { status: Refund.STATUS.REJECTED, rejectedBy: req.user._id }], pay: [Refund.STATUS.APPROVED, { status: Refund.STATUS.PAID, paidBy: req.user._id, paidAt: new Date().toISOString() }] }; const transition = transitions[action]; if (!transition || refund.status !== transition[0]) throw new ApiError(409, `Refund cannot be ${action} from ${refund.status}`); await Refund.update(id, transition[1]); const updated = await Refund.findById(id); await createAuditLog({ req, entityType: "Refund", entityId: id, action: AuditLog.ACTIONS.STATUS_CHANGE, changes: { before: refund, after: updated } }); return updated; }
+  static async listRefunds({ page, limit } = {}) {
+    const { paginate } = require("../../utils/paginate");
+    const rows = await Refund.find({}, { sort: { createdAt: -1 } });
+    return paginate(rows, { page, limit });
+  }
+  static async updateRefund(id, action, req) {
+    const refund = await Refund.findById(id);
+    if (!refund) throw new ApiError(404, "Refund not found");
+    if (action === "approve") await assertSeparationOfDuties(req, refund.createdBy, "a refund");
+    const transitions = {
+      approve: [Refund.STATUS.PENDING, { status: Refund.STATUS.APPROVED, approvedBy: req.user._id }],
+      reject: [Refund.STATUS.PENDING, { status: Refund.STATUS.REJECTED, rejectedBy: req.user._id }],
+      pay: [Refund.STATUS.APPROVED, { status: Refund.STATUS.PAID, paidBy: req.user._id, paidAt: new Date().toISOString() }],
+    };
+    const transition = transitions[action];
+    if (!transition || refund.status !== transition[0]) throw new ApiError(409, `Refund cannot be ${action} from ${refund.status}`);
+    await Refund.update(id, transition[1]);
+    const updated = await Refund.findById(id);
+    await createAuditLog({ req, entityType: "Refund", entityId: id, action: AuditLog.ACTIONS.STATUS_CHANGE, changes: { before: refund, after: updated } });
+    return updated;
+  }
 }
 module.exports = { PaymentService, getPenaltyRule };

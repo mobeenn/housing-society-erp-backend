@@ -2206,9 +2206,9 @@ function validateDevelopmentData(datasets) {
 }
 
 async function seedDevelopmentData() {
-  if (env.isProd) {
+  if (env.isProd && process.env.ALLOW_DEMO_SEED !== "true") {
     throw new Error(
-      "Development demo data cannot be seeded when NODE_ENV=production.",
+      "Development demo data cannot be seeded when NODE_ENV=production. Set ALLOW_DEMO_SEED=true to override.",
     );
   }
 

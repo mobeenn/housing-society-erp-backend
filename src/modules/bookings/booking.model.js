@@ -74,6 +74,10 @@ class Installment {
     return db.collection(this.collectionName).find(query, options);
   }
 
+  static async findById(id) {
+    return db.collection(this.collectionName).findOne({ _id: id });
+  }
+
   static async update(id, data) {
     return db.collection(this.collectionName).updateOne({ _id: id }, data);
   }

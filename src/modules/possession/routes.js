@@ -11,5 +11,6 @@ router.get("/:id", authorize("possession", "view"), controller.get);
 router.post("/:id/verify", authorize("possession", "approve"), controller.verify);
 router.post("/:id/pay-charges", authorize("possession", "edit"), controller.payCharges);
 router.post("/:id/approve", authorize("possession", "approve"), controller.approve);
+router.post("/:id/reject", authorize("possession", "approve"), controller.reject);
 router.post("/:id/issue", authorize("possession", "approve"), controller.issue);
 module.exports = router;

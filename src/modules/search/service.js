@@ -1,21 +1,22 @@
 const { db } = require("../../config/db");
+const RbacService = require("../rbac/service");
 
 const SEARCH_CONFIG = [
-  { type: "member", label: "Members", collection: "members", fields: ["name", "memberId", "cnic", "phone", "email"], title: (item) => item.name, subtitle: (item) => `${item.memberId} · ${item.phone || item.email || "No contact"}`, route: (item) => `/members/${item._id}` },
-  { type: "plot", label: "Plots", collection: "plots", fields: ["plotNumber", "fileNumber", "location"], title: (item) => item.plotNumber, subtitle: (item) => `${item.location || "Plot"} · ${item.status}`, route: (item) => `/plots/${item._id}` },
-  { type: "booking", label: "Bookings", collection: "bookings", fields: ["bookingDate", "status"], title: (item) => `Booking ${item._id}`, subtitle: (item) => item.status, route: (item) => `/bookings/${item._id}` },
-  { type: "payment", label: "Receipts", collection: "payments", fields: ["receiptNumber", "method", "status"], title: (item) => item.receiptNumber, subtitle: (item) => `${item.method} · PKR ${Number(item.amount || 0).toLocaleString()}`, route: (item) => `/payments/${item._id}` },
-  { type: "complaint", label: "Complaints", collection: "complaints", fields: ["complaintNumber", "description", "category", "status"], title: (item) => item.complaintNumber, subtitle: (item) => `${item.category} · ${item.status}`, route: (item) => `/complaints/${item._id}` },
-  { type: "transfer", label: "Transfers", collection: "transferRequests", fields: ["type", "status"], title: (item) => `Transfer ${item._id}`, subtitle: (item) => item.status, route: (item) => `/transfers/${item._id}` },
-  { type: "noc", label: "NOCs", collection: "nocApplications", fields: ["issuedNocNumber", "nocType", "status"], title: (item) => item.issuedNocNumber || `NOC ${item._id}`, subtitle: (item) => `${item.nocType} · ${item.status}`, route: (item) => `/nocs/${item._id}` },
-  { type: "possession", label: "Possession", collection: "possessionApplications", fields: ["status"], title: (item) => `Possession ${item._id}`, subtitle: (item) => item.status, route: (item) => `/possession/${item._id}` },
-  { type: "construction", label: "Construction", collection: "constructionApplications", fields: ["applicationType", "status"], title: (item) => `Construction ${item._id}`, subtitle: (item) => `${item.applicationType} · ${item.status}`, route: (item) => `/construction/${item._id}` },
-  { type: "workOrder", label: "Work Orders", collection: "workOrders", fields: ["description", "status", "priority"], title: (item) => `Work order ${item._id}`, subtitle: (item) => `${item.priority} · ${item.status}`, route: (item) => `/maintenance/${item._id}` },
-  { type: "vehicle", label: "Vehicles", collection: "vehicles", fields: ["number", "model", "stickerNumber", "status"], title: (item) => item.number, subtitle: (item) => `${item.model} · ${item.status}`, route: () => "/security/vehicles" },
-  { type: "pass", label: "Passes", collection: "passes", fields: ["passNumber", "holderName", "phone", "cnic", "status"], title: (item) => item.passNumber, subtitle: (item) => `${item.holderName} · ${item.status}`, route: () => "/security/visitors/passes" },
-  { type: "document", label: "Documents", collection: "documents", fields: ["name", "fileName", "originalName", "number", "mimeType"], title: (item) => item.name || item.fileName || item.originalName || `Document ${item._id}`, subtitle: (item) => item.mimeType || "Document", route: () => "/documents" },
-  { type: "notice", label: "Notices", collection: "notices", fields: ["title", "body", "status"], title: (item) => item.title, subtitle: (item) => item.body?.slice(0, 90), route: () => "/notices" },
-  { type: "vendor", label: "Vendors", collection: "vendors", fields: ["name", "contactPerson", "email", "category"], title: (item) => item.name, subtitle: (item) => `${item.category} · ${item.contactPerson || "No contact"}`, route: () => "/procurement/vendors" },
+  { type: "member", label: "Members", module: "members", collection: "members", fields: ["name", "memberId", "cnic", "phone", "email"], title: (item) => item.name, subtitle: (item) => `${item.memberId} · ${item.phone || item.email || "No contact"}`, route: (item) => `/members/${item._id}` },
+  { type: "plot", label: "Plots", module: "plots", collection: "plots", fields: ["plotNumber", "fileNumber", "location"], title: (item) => item.plotNumber, subtitle: (item) => `${item.location || "Plot"} · ${item.status}`, route: (item) => `/plots/${item._id}` },
+  { type: "booking", label: "Bookings", module: "bookings", collection: "bookings", fields: ["bookingDate", "status"], title: (item) => `Booking ${item._id}`, subtitle: (item) => item.status, route: (item) => `/bookings/${item._id}` },
+  { type: "payment", label: "Receipts", module: "payments", collection: "payments", fields: ["receiptNumber", "method", "status"], title: (item) => item.receiptNumber, subtitle: (item) => `${item.method} · PKR ${Number(item.amount || 0).toLocaleString()}`, route: (item) => `/payments/${item._id}` },
+  { type: "complaint", label: "Complaints", module: "complaints", collection: "complaints", fields: ["complaintNumber", "description", "category", "status"], title: (item) => item.complaintNumber, subtitle: (item) => `${item.category} · ${item.status}`, route: (item) => `/complaints/${item._id}` },
+  { type: "transfer", label: "Transfers", module: "transfers", collection: "transferRequests", fields: ["type", "status"], title: (item) => `Transfer ${item._id}`, subtitle: (item) => item.status, route: (item) => `/transfers/${item._id}` },
+  { type: "noc", label: "NOCs", module: "nocs", collection: "nocApplications", fields: ["issuedNocNumber", "nocType", "status"], title: (item) => item.issuedNocNumber || `NOC ${item._id}`, subtitle: (item) => `${item.nocType} · ${item.status}`, route: (item) => `/nocs/${item._id}` },
+  { type: "possession", label: "Possession", module: "possession", collection: "possessionApplications", fields: ["status"], title: (item) => `Possession ${item._id}`, subtitle: (item) => item.status, route: (item) => `/possession/${item._id}` },
+  { type: "construction", label: "Construction", module: "construction", collection: "constructionApplications", fields: ["applicationType", "status"], title: (item) => `Construction ${item._id}`, subtitle: (item) => `${item.applicationType} · ${item.status}`, route: (item) => `/construction/${item._id}` },
+  { type: "workOrder", label: "Work Orders", module: "maintenance", collection: "workOrders", fields: ["description", "status", "priority"], title: (item) => `Work order ${item._id}`, subtitle: (item) => `${item.priority} · ${item.status}`, route: (item) => `/maintenance/${item._id}` },
+  { type: "vehicle", label: "Vehicles", module: "security-vehicles", collection: "vehicles", fields: ["number", "model", "stickerNumber", "status"], title: (item) => item.number, subtitle: (item) => `${item.model} · ${item.status}`, route: () => "/security/vehicles" },
+  { type: "pass", label: "Passes", module: "visitors", collection: "passes", fields: ["passNumber", "holderName", "phone", "cnic", "status"], title: (item) => item.passNumber, subtitle: (item) => `${item.holderName} · ${item.status}`, route: () => "/security/visitors/passes" },
+  { type: "document", label: "Documents", module: "documents", collection: "documents", fields: ["name", "fileName", "originalName", "number", "mimeType"], title: (item) => item.name || item.fileName || item.originalName || `Document ${item._id}`, subtitle: (item) => item.mimeType || "Document", route: () => "/documents" },
+  { type: "notice", label: "Notices", module: "notices", collection: "notices", fields: ["title", "body", "status"], title: (item) => item.title, subtitle: (item) => item.body?.slice(0, 90), route: () => "/notices" },
+  { type: "vendor", label: "Vendors", module: "procurement", collection: "vendors", fields: ["name", "contactPerson", "email", "category"], title: (item) => item.name, subtitle: (item) => `${item.category} · ${item.contactPerson || "No contact"}`, route: () => "/procurement/vendors" },
 ];
 
 const PER_COLLECTION_LIMIT = 10;
@@ -52,15 +53,30 @@ class SearchService {
     });
   }
 
-  static async search(q, limit = 30) {
+  static async allowedConfigs(user) {
+    const allowed = [];
+    for (const config of SEARCH_CONFIG) {
+      if (await RbacService.isAllowed(user, config.module, "view")) {
+        allowed.push(config);
+      }
+    }
+    return allowed;
+  }
+
+  static async search(q, limit = 30, user = null) {
     const query = String(q || "").trim();
     if (query.length < 2) return { query, total: 0, groups: [], items: [] };
     const safeLimit = Math.min(100, Math.max(1, Number(limit) || 30));
 
-    const collections = await Promise.all(SEARCH_CONFIG.map((config) => this.searchCollection(config, query)));
+    const configs = user ? await this.allowedConfigs(user) : [];
+    if (!configs.length) {
+      return { query, total: 0, groups: [], items: [] };
+    }
+
+    const collections = await Promise.all(configs.map((config) => this.searchCollection(config, query)));
     const results = [];
 
-    SEARCH_CONFIG.forEach((config, index) => {
+    configs.forEach((config, index) => {
       for (const item of collections[index]) {
         const score = this.score(item, config.fields, query);
         if (!score) continue;
@@ -79,7 +95,7 @@ class SearchService {
 
     results.sort((a, b) => b.score - a.score || String(b.updatedAt).localeCompare(String(a.updatedAt)));
     const limited = results.slice(0, safeLimit);
-    const groups = SEARCH_CONFIG.map((config) => ({
+    const groups = configs.map((config) => ({
       type: config.type,
       label: config.label,
       items: limited.filter((item) => item.type === config.type),
@@ -89,3 +105,4 @@ class SearchService {
 }
 
 module.exports = SearchService;
+module.exports.SEARCH_CONFIG = SEARCH_CONFIG;

@@ -37,6 +37,7 @@ class Role {
       description: roleData.description?.trim(),
       permissions: roleData.permissions || [],
       isSystemRole: roleData.isSystemRole || false,
+      isActive: roleData.isActive !== false,
     });
     return result;
   }

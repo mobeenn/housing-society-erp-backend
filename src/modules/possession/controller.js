@@ -6,5 +6,12 @@ exports.create = async (req, res) => ApiResponse.success(res, 201, await Possess
 exports.verify = async (req, res) => ApiResponse.success(res, 200, await PossessionService.verify(req.params.id, req), "Possession verified");
 exports.payCharges = async (req, res) => ApiResponse.success(res, 200, await PossessionService.payCharges(req.params.id, req), "Possession charges paid");
 exports.approve = async (req, res) => ApiResponse.success(res, 200, await PossessionService.approve(req.params.id, req), "Possession approved");
+exports.reject = async (req, res) =>
+  ApiResponse.success(
+    res,
+    200,
+    await PossessionService.reject(req.params.id, req.body?.reason, req),
+    "Possession rejected"
+  );
 exports.issue = async (req, res) => ApiResponse.success(res, 200, await PossessionService.issue(req.params.id, req), "Possession issued");
 exports.letter = async (req, res) => { const { app, buffer } = await PossessionService.letter(req.params.id); res.type("application/pdf").setHeader("Content-Disposition", `attachment; filename="possession-${app.plotRef?.plotNumber || app.plot}.pdf"`).send(buffer); };

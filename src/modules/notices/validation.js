@@ -9,6 +9,7 @@ const noticeObjectSchema = z.object({
     publishDate: z.string().datetime({ offset: true }).or(z.string().date()),
     expiryDate: z.string().datetime({ offset: true }).or(z.string().date()).nullable().optional(),
     status: z.enum(["Draft", "Published"]).default("Draft"),
+    sendEmail: z.boolean().optional().default(false),
 });
 
 const baseNoticeSchema = noticeObjectSchema.superRefine((data, ctx) => {

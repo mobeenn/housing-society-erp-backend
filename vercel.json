@@ -9,5 +9,11 @@
     "api/index.js": {
       "maxDuration": 30
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/recovery/cron/auto-block",
+      "schedule": "0 2 * * *"
+    }
+  ]
 }

@@ -33,7 +33,7 @@ exports.getMemberById = async (req, res) => {
  * Get member 360 view with aggregated data
  */
 exports.getMember360 = async (req, res) => {
-  const data = await MemberService.getMember360(req.params.id);
+  const data = await MemberService.getMember360(req.params.id, req.user);
   ApiResponse.success(res, 200, data);
 };
 
@@ -70,13 +70,6 @@ exports.createMember = async (req, res) => {
  */
 exports.updateMember = async (req, res) => {
   const result = await MemberService.updateMember(req.params.id, req.body, req.user._id);
-
-  if (!result.success) {
-    return ApiResponse.error(res, 409, "Duplicate member detected", [
-      result.duplicateWarning,
-    ]);
-  }
-
   ApiResponse.success(res, 200, result.member, "Member updated successfully");
 };
 

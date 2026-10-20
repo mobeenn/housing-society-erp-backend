@@ -1,19 +1,37 @@
+const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { prisma } = require("../../config/prisma");
 const ApiError = require("../../utils/ApiError");
 const env = require("../../config/env");
+const { dispatchNotification } = require("../../services/notificationChannels");
+
+const GENERIC_FORGOT_MESSAGE =
+  "If an account exists for that email, a password reset link has been sent.";
+
+function publicAppBaseUrl() {
+  if (env.APP_PUBLIC_URL) return env.APP_PUBLIC_URL.replace(/\/$/, "");
+  const first = String(env.CORS_ORIGIN || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)[0];
+  return (first || "http://localhost:3000").replace(/\/$/, "");
+}
 
 class AuthService {
   /**
    * Generate access and refresh tokens for a user.
    */
   static generateTokens(user) {
+    const roles =
+      user.roles?.map((r) => (typeof r === "object" ? r.name : r)) ||
+      user.userRoles?.map((entry) => entry.role?.name).filter(Boolean) ||
+      [];
     const payload = {
       id: user.id,
       email: user.email,
       name: user.name,
-      roles: user.roles?.map((r) => (typeof r === "object" ? r.name : r)),
+      roles,
     };
 
     const accessToken = jwt.sign(payload, env.JWT_ACCESS_SECRET, {
@@ -21,7 +39,7 @@ class AuthService {
     });
 
     const refreshToken = jwt.sign(
-      { id: user.id },
+      { id: user.id, tokenVersion: user.tokenVersion ?? 0 },
       env.JWT_REFRESH_SECRET,
       { expiresIn: env.JWT_REFRESH_EXPIRY }
     );
@@ -127,11 +145,90 @@ class AuthService {
         throw new ApiError(401, "Invalid or expired token");
       }
 
-      const tokens = this.generateTokens(user);
-      return tokens;
+      const expectedVersion = user.tokenVersion ?? 0;
+      if (Number(decoded.tokenVersion ?? 0) !== Number(expectedVersion)) {
+        throw new ApiError(401, "Invalid or expired refresh token");
+      }
+
+      return this.generateTokens(user);
     } catch (error) {
+      if (error instanceof ApiError) throw error;
       throw new ApiError(401, "Invalid or expired refresh token");
     }
+  }
+
+  /**
+   * Always returns a generic message. Creates a one-hour single-use token when the user exists.
+   */
+  static async forgotPassword(email) {
+    const normalized = String(email || "").toLowerCase().trim();
+    const user = await prisma.user.findUnique({ where: { email: normalized } });
+    if (!user || !user.isActive || !user.passwordHash) {
+      return { message: GENERIC_FORGOT_MESSAGE };
+    }
+
+    const rawToken = crypto.randomBytes(32).toString("hex");
+    const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
+
+    await prisma.passwordResetToken.create({
+      data: { userId: user.id, tokenHash, expiresAt },
+    });
+
+    const resetUrl = `${publicAppBaseUrl()}/reset-password?token=${rawToken}`;
+    try {
+      await dispatchNotification("email", {
+        recipient: user.email,
+        subject: "Civica password reset",
+        message: `Reset your password using this link (valid for 1 hour):\n\n${resetUrl}\n\nIf you did not request this, ignore this email.`,
+        metadata: { event: "auth.forgot_password", userId: user.id },
+      });
+    } catch (err) {
+      console.error("[Auth] Failed to send reset email:", err.message);
+    }
+
+    return { message: GENERIC_FORGOT_MESSAGE };
+  }
+
+  static async resetPassword(token, newPassword) {
+    if (!token || !newPassword) {
+      throw new ApiError(400, "Token and new password are required");
+    }
+
+    const tokenHash = crypto.createHash("sha256").update(String(token)).digest("hex");
+    const record = await prisma.passwordResetToken.findFirst({
+      where: { tokenHash },
+      orderBy: { createdAt: "desc" },
+    });
+
+    if (!record || record.usedAt || record.expiresAt.getTime() < Date.now()) {
+      throw new ApiError(400, "Invalid or expired reset token");
+    }
+
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+    await prisma.$transaction([
+      prisma.user.update({
+        where: { id: record.userId },
+        data: {
+          passwordHash,
+          mustResetPassword: false,
+          tokenVersion: { increment: 1 },
+        },
+      }),
+      prisma.passwordResetToken.update({
+        where: { id: record.id },
+        data: { usedAt: new Date() },
+      }),
+    ]);
+
+    await this._safeCreateAuditLog({
+      userId: record.userId,
+      action: "reset_password",
+      status: "success",
+      meta: {},
+    });
+
+    return { message: "Password has been reset. You can sign in with your new password." };
   }
 
   /**
@@ -177,7 +274,11 @@ class AuthService {
     const newPasswordHash = await bcrypt.hash(newPassword, 10);
     await prisma.user.update({
       where: { id: userId },
-      data: { passwordHash: newPasswordHash, mustResetPassword: false },
+      data: {
+        passwordHash: newPasswordHash,
+        mustResetPassword: false,
+        tokenVersion: { increment: 1 },
+      },
     });
 
     // Log successful password change

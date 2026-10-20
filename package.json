@@ -10,7 +10,7 @@
     "test:rbac:e2e": "node test-rbac-e2e.js",
     "invoices:backfill": "node src/seeds/backfillInvoices.js",
     "storage:import": "node scripts/importLocalDataToBlob.js",
-    "seed": "npm run seed:roles && npm run seed:administration && npm run seed:numbering && npm run rbac:seed && npm run recovery:seed && npm run hr-payroll:seed && npm run phase15:seed",
+    "seed": "npm run seed:roles && npm run seed:administration && npm run seed:numbering && npm run rbac:seed && npm run recovery:seed && npm run hr-payroll:seed && npm run phase15:seed && node src/seeds/seedRoleRedefinition.js --force",
     "recovery:seed": "node src/seeds/seedRecoveryAccess.js",
     "hr-payroll:seed": "node src/seeds/seedHrPayrollAccess.js",
     "phase15:seed": "node src/seeds/seedPhase15Access.js",
@@ -21,6 +21,8 @@
     "rbac:migrate:force": "node src/seeds/seedRbacModules.js --force",
     "seed:development": "npm run seed && npm run seed:demo && npm run seed:phase8 && npm run rbac:seed && npm run invoices:backfill",
     "seed:roles": "node src/seeds/seedRolesAndSuperAdmin.js",
+    "roles:merge-store-procurement": "node src/seeds/migrateStoreProcurementRoles.js",
+    "roles:redefine": "node src/seeds/seedRoleRedefinition.js",
     "seed:administration": "node src/seeds/seedAdministration.js",
     "seed:numbering": "node src/seeds/seedNumberingRules.js",
     "lint": "eslint src/",
@@ -40,6 +42,7 @@
     "db:baseline:restore": "node scripts/snapshotBaseline.js restore",
     "hr:backfill-departments": "node scripts/backfillEmployeeDepartments.js",
     "db:verify:reports": "node scripts/verifyReports.js",
+    "db:orphan-check": "node scripts/checkOrphanRefs.js",
     "test:file": "node scripts/runTests.js --no-setup"
   },
   "keywords": [
@@ -71,6 +74,7 @@
     "jsonwebtoken": "^9.0.3",
     "morgan": "^1.12.1",
     "multer": "^2.4.0",
+    "nodemailer": "^6.10.1",
     "pdfkit": "^0.20.2",
     "pg": "^8.23.0",
     "qrcode": "^1.5.4",

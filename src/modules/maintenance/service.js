@@ -35,7 +35,8 @@ const enrichWorkOrder = async (workOrder) => {
 };
 
 class AssetService {
-  static async list({ type, q } = {}) {
+  static async list({ type, q, page, limit } = {}) {
+    const { paginate } = require("../../utils/paginate");
     const query = {};
     if (type) query.type = type;
     const all = await Asset.find(query, { sort: { name: 1 } });
@@ -48,7 +49,7 @@ class AssetService {
             .includes(String(q).toLowerCase())
         )
       : all;
-    return { data: matches, pagination: { total: matches.length } };
+    return paginate(matches, { page, limit });
   }
 
   static async get(id) {

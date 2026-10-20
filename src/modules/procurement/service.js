@@ -6,6 +6,7 @@ const GRN = require("./grn.model");
 const User = require("../auth/user.model");
 const NumberingRule = require("../administration/numberingRule.model");
 const { createAuditLog } = require("../administration/auditLog.model");
+const InventoryService = require("../inventory/service");
 const ApiError = require("../../utils/ApiError");
 
 /** Enrich vendor with computed outstanding balance */
@@ -543,8 +544,19 @@ class GRNService {
       await PurchaseOrder.update(data.purchaseOrder, { status: PurchaseOrder.STATUSES.PARTIALLY_RECEIVED });
     }
 
-    // TODO: Phase 7.3 - Trigger inventory stock increase here
-    // for each item in grn.items where receivedQty > 0
+    // Accepted qty (received − rejected) increases inventory once per GRN line.
+    for (const line of grn.items || []) {
+      const accepted = Math.max(0, Number(line.receivedQty || 0) - Number(line.rejectedQty || 0));
+      if (accepted <= 0) continue;
+      const itemName = String(line.item || "").trim();
+      await InventoryService.applyGrnReceipt({
+        name: itemName,
+        sku: itemName.slice(0, 64) || undefined,
+        quantity: accepted,
+        grnId: grn._id,
+        createdBy: req.user._id,
+      });
+    }
 
     await createAuditLog({
       action: "create",

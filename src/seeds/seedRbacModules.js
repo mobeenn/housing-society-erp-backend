@@ -2,43 +2,64 @@ const { connectDB, db } = require("../config/db");
 const Module = require("../modules/rbac/module.model");
 const RbacService = require("../modules/rbac/service");
 
+/**
+ * P3-1 sidebar regroup. Tuple:
+ * [key, label, description, group, icon, sortOrder, route, showInSidebar=true]
+ */
 const MODULES = [
-  ["dashboards", "Dashboards", "Role-specific operational dashboards", "Overview", "LayoutDashboard", 10, "/dashboard"],
-  ["members", "Members", "Member registration and records", "Members & Property", "Users", 20, "/members"],
-  ["plots", "Plots / Units", "Plot inventory and ownership", "Members & Property", "Map", 30, "/plots"],
-  ["bookings", "Bookings", "Plot booking and approvals", "Members & Property", "ClipboardCheck", 40, "/bookings"],
-  ["installments", "Installments", "Installment plans and balances", "Finance", "CalendarCheck", 50, "/payments", false],
-  ["transfers", "Transfers", "Ownership transfer workflows", "Members & Property", "ArrowRightLeft", 60, "/transfers"],
-  ["possession", "Possession", "Possession applications and handover", "Members & Property", "Hand", 70, "/possession"],
-  ["nocs", "NOCs", "No-objection certificates", "Members & Property", "FileCheck", 80, "/nocs"],
-  ["construction", "Construction", "Construction approvals and inspections", "Members & Property", "HardHat", 90, "/construction"],
-  ["payments", "Payments", "Payments, receipts and allocation", "Finance", "Wallet", 100, "/payments"],
-  ["refunds", "Refunds", "Refund requests and processing", "Finance", "Undo2", 110, "/refunds"],
-  ["expenses", "Expenses", "Society expenses and approvals", "Finance", "Receipt", 120, "/expenses"],
-  ["reports", "Reports", "Cross-module reports and exports", "Finance", "BarChart3", 130, "/reports"],
-  ["complaints", "Complaints", "Complaint intake and SLA tracking", "Operations", "MessageSquareWarning", 140, "/complaints"],
-  ["maintenance", "Maintenance", "Work orders and maintenance", "Operations", "Wrench", 150, "/maintenance"],
-  ["assets", "Assets", "Society asset registry", "Operations", "Package", 160, "/assets"],
-  ["procurement", "Procurement", "Vendors, quotations and purchase orders", "Operations", "ShoppingCart", 170, "/procurement/vendors"],
-  ["inventory", "Inventory", "Stock levels and low-stock alerts", "Operations", "Boxes", 180, "/inventory"],
-  ["security-guards", "Guard Roster", "Security staff and duty roster", "Security", "Shield", 190, "/security/guards"],
-  ["security-vehicles", "Vehicles", "Vehicle registry and access stickers", "Security", "Car", 200, "/security/vehicles"],
-  ["visitors", "Visitors", "Visitor entry, passes and blacklist", "Security", "UserCheck", 210, "/security/visitors/entry"],
-  ["hr", "HR & Staff", "Employees, attendance and leave", "Human Resources", "UserCog", 220, "/hr/employees"],
-  ["notices", "Notice Board", "Society announcements", "Communication", "Bell", 230, "/notices"],
-  ["settings", "Society Settings", "Society configuration and master data", "Administration", "Settings", 240, "/settings/profile"],
-  ["users-roles", "Users & Roles", "User accounts, roles and access control", "Administration", "ShieldCheck", 250, "/admin/users"],
-  ["audit", "Audit Logs", "System audit trail", "Administration", "Activity", 260, "/settings/audit-logs"],
-  ["documents", "Documents", "Member and entity documents", "Members & Property", "FolderOpen", 270, "/documents", false],
-  ["invoices", "Invoices", "Searchable registry of generated society documents", "Finance", "FileText", 300, "/invoices", true],
-  ["dealers", "Dealers", "Future dealer management module", "Future Modules", "Handshake", 310, "/dealers", false],
-  ["recovery", "Recovery", "Overdue installment recovery assignments and calls", "Finance", "SearchCheck", 320, "/recovery", true],
-  ["finance-gl", "Finance GL", "Future general ledger module", "Finance", "BookOpen", 330, "/finance-gl", false],
-  ["hr-payroll", "HR Payroll", "Payroll, employee loans and statutory configuration", "Human Resources", "BadgeDollarSign", 340, "/hr/payroll", true],
-  ["appointments", "Appointments", "Front-desk business visitor tokens and meeting queue", "Front Desk", "CalendarClock", 350, "/appointments", true],
-  ["plot-merge", "Plot Merge", "Irreversible plot merge workflow", "Members & Property", "Combine", 360, "/plot-merge", true],
-  ["buyback", "Buyback / Cancel", "Irreversible booking buyback and cancellation workflow", "Finance", "RefreshCcw", 370, "/buyback", true],
-  ["registry", "Registry", "Physical paperwork registry batch tracking", "Administration", "Library", 380, "/registry", true],
+  // Home
+  ["dashboards", "Dashboard", "Role-specific operational dashboards", "Home", "LayoutDashboard", 10, "/dashboard"],
+
+  // People & Property
+  ["members", "Members", "Member registration and records", "People & Property", "Users", 20, "/members"],
+  ["plots", "Plots / Units", "Plot inventory and ownership", "People & Property", "Map", 30, "/plots"],
+  ["bookings", "Bookings", "Plot booking and approvals", "People & Property", "ClipboardCheck", 40, "/bookings"],
+  ["documents", "Documents", "Member and entity documents", "People & Property", "FolderOpen", 45, "/documents", false],
+
+  // Finance
+  ["payments", "Payments", "Payments, receipts and allocation", "Finance", "Wallet", 50, "/payments"],
+  ["installments", "Installments", "Installment plans and balances", "Finance", "CalendarCheck", 55, "/payments", false],
+  ["refunds", "Refunds", "Refund requests and processing", "Finance", "Undo2", 60, "/refunds"],
+  ["expenses", "Expenses", "Society expenses and approvals", "Finance", "Receipt", 70, "/expenses"],
+  ["recovery", "Recovery", "Overdue installment recovery assignments and calls", "Finance", "SearchCheck", 80, "/recovery", true],
+  ["reports", "Reports", "Cross-module reports and exports", "Finance", "BarChart3", 90, "/reports"],
+  ["invoices", "Receipts & Certificates", "Searchable registry of generated society documents", "Finance", "FileText", 100, "/invoices", true],
+  ["finance-gl", "Finance GL", "Internal general ledger module", "Finance", "BookOpen", 105, "/finance-gl", false],
+  ["buyback", "Buyback / Cancel", "Irreversible booking buyback and cancellation (via booking detail)", "Finance", "RefreshCcw", 110, "/buyback", false],
+
+  // Property Services
+  ["transfers", "Transfers", "Ownership transfer workflows", "Property Services", "ArrowRightLeft", 120, "/property-services?type=transfer"],
+  ["nocs", "NOCs", "No-objection certificates", "Property Services", "FileCheck", 130, "/property-services?type=noc"],
+  ["possession", "Possession", "Possession applications and handover", "Property Services", "Hand", 140, "/property-services?type=possession"],
+  ["construction", "Construction", "Construction approvals and inspections", "Property Services", "HardHat", 150, "/property-services?type=construction"],
+  ["registry", "Registry", "Physical paperwork registry batch tracking", "Property Services", "Library", 160, "/property-services?type=registry"],
+  ["plot-merge", "Plot Merge", "Irreversible plot merge (via plot detail)", "Property Services", "Combine", 170, "/plot-merge", false],
+
+  // Operations
+  ["complaints", "Complaints", "Complaint intake and SLA tracking", "Operations", "MessageSquareWarning", 180, "/complaints"],
+  ["maintenance", "Maintenance", "Work orders and maintenance", "Operations", "Wrench", 190, "/maintenance"],
+  ["assets", "Assets", "Society asset registry", "Operations", "Package", 200, "/assets"],
+  ["inventory", "Inventory", "Stock levels and low-stock alerts", "Operations", "Boxes", 210, "/inventory"],
+  ["procurement", "Purchasing", "Vendors, quotations and purchase orders", "Operations", "ShoppingCart", 220, "/procurement/vendors"],
+
+  // Security & Front Desk
+  ["visitors", "Visitors", "Gate entries and office appointments", "Security & Front Desk", "UserCheck", 230, "/security/visitors"],
+  ["security-vehicles", "Vehicles", "Vehicle registry and access stickers", "Security & Front Desk", "Car", 240, "/security/vehicles"],
+  ["security-guards", "Guards", "Security staff and duty roster", "Security & Front Desk", "Shield", 250, "/security/guards"],
+  ["appointments", "Office Appointments", "Front-desk business visitor tokens and meeting queue", "Security & Front Desk", "CalendarClock", 260, "/security/visitors/appointments", false],
+
+  // People (HR)
+  ["hr", "HR", "Employees, attendance and leave", "People (HR)", "UserCog", 270, "/hr/employees"],
+  ["hr-payroll", "Payroll", "Payroll, employee loans and statutory configuration", "People (HR)", "BadgeDollarSign", 280, "/hr/payroll", false],
+
+  // Admin
+  ["notices", "Notices", "Society announcements", "Admin", "Bell", 290, "/notices"],
+  ["users-roles", "Users & Roles", "User accounts, roles and access control", "Admin", "ShieldCheck", 300, "/admin/users"],
+  ["settings", "Settings", "Society configuration and master data", "Admin", "Settings", 310, "/settings/profile"],
+  ["audit", "Audit Log", "System audit trail", "Admin", "Activity", 320, "/settings/audit-logs"],
+
+  // Hidden placeholders
+  ["dealers", "Dealers", "Future dealer management module", "Admin", "Handshake", 990, "/dealers", false],
 ];
 
 async function seedRbac() {

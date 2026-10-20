@@ -73,6 +73,17 @@ class AuthController {
     );
     return ApiResponse.success(res, 200, result.message);
   }
+
+  static async forgotPassword(req, res) {
+    const result = await AuthService.forgotPassword(req.body.email);
+    return ApiResponse.success(res, 200, result.message);
+  }
+
+  static async resetPassword(req, res) {
+    const result = await AuthService.resetPassword(req.body.token, req.body.password);
+    res.clearCookie("refreshToken", refreshCookieBaseOptions);
+    return ApiResponse.success(res, 200, result.message);
+  }
 }
 
 module.exports = AuthController;

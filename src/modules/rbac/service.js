@@ -1,5 +1,6 @@
 const { prisma } = require("../../config/prisma");
 const ApiError = require("../../utils/ApiError");
+const { HIDDEN_ACCESS_CONTROL_KEYS } = require("../../seeds/roleMatrix");
 
 const RBAC_MIGRATION_VERSION = "dynamic-rbac-v3";
 
@@ -265,7 +266,9 @@ class RbacService {
       return {
         role: { id: role.id, name: role.name, description: role.description, isSystem: Boolean(role.isSystem || role.isSystemRole), isSystemRole: Boolean(role.isSystemRole) },
         readOnly: true,
-        modules: modules.map((module) => ({ ...module, isVisible: true, actions: Object.fromEntries(ACTIONS.map((action) => [action, true])) })),
+        modules: modules
+          .filter((module) => !HIDDEN_ACCESS_CONTROL_KEYS.includes(module.key))
+          .map((module) => ({ ...module, isVisible: true, actions: Object.fromEntries(ACTIONS.map((action) => [action, true])) })),
       };
     }
     const records = await prisma.roleModuleAccess.findMany({
@@ -275,11 +278,51 @@ class RbacService {
     return {
       role: { id: role.id, name: role.name, description: role.description, isSystem: Boolean(role.isSystem || role.isSystemRole), isSystemRole: Boolean(role.isSystemRole) },
       readOnly: false,
-      modules: modules.map((module) => {
-        const record = byModule.get(module.id);
-        return { ...module, isVisible: record?.isVisible === true, actions: record?.actions || defaultActions() };
-      }),
+      modules: modules
+        .filter((module) => !HIDDEN_ACCESS_CONTROL_KEYS.includes(module.key))
+        .map((module) => {
+          const record = byModule.get(module.id);
+          return { ...module, isVisible: record?.isVisible === true, actions: record?.actions || defaultActions() };
+        }),
     };
+  }
+
+  static async resetRoleToDefault(roleId) {
+    const role = await prisma.role.findUnique({ where: { id: roleId } });
+    if (!role) throw new ApiError(404, "Role not found");
+    if (role.name === "Super Admin" || role.permissions?.includes("system:admin")) {
+      throw new ApiError(400, "Super Admin access is managed automatically and cannot be reset");
+    }
+    const { applyMatrixForRole } = require("../../seeds/seedRoleRedefinition");
+    const result = await applyMatrixForRole(role.name, { force: true });
+    if (result.skipped) {
+      throw new ApiError(400, `Unable to reset role: ${result.reason}`);
+    }
+    const meta = await prisma.masterData.findFirst({
+      where: { type: "roleRedefinition", name: "version" },
+    });
+    let fingerprints = {};
+    try {
+      fingerprints = JSON.parse(meta?.description || "{}").fingerprints || {};
+    } catch {
+      fingerprints = {};
+    }
+    fingerprints[role.id] = result.fingerprint;
+    await prisma.masterData.upsert({
+      where: { type_name: { type: "roleRedefinition", name: "version" } },
+      create: {
+        type: "roleRedefinition",
+        name: "version",
+        code: "role-redefinition-v1",
+        description: JSON.stringify({ version: "role-redefinition-v1", fingerprints }),
+      },
+      update: {
+        code: "role-redefinition-v1",
+        description: JSON.stringify({ version: "role-redefinition-v1", fingerprints }),
+      },
+    });
+    invalidateMyAccessCache();
+    return this.getRoleAccessGrid(roleId);
   }
 
   static async updateRoleAccess(roleId, payload, updatedBy) {
@@ -313,7 +356,9 @@ class RbacService {
 
     // PUT replaces the complete grid. Missing modules are explicitly reset to
     // hidden so a stale record can never survive a partial UI save.
+    // Placeholder / internal modules are never exposed in the UI — leave them alone.
     for (const module of modules) {
+      if (HIDDEN_ACCESS_CONTROL_KEYS.includes(module.key)) continue;
       const update = updateByKey.get(module.key) || { isVisible: false, actions: {} };
       await prisma.roleModuleAccess.upsert({
         where: { roleId_moduleId: { roleId, moduleId: module.id } },
@@ -519,4 +564,5 @@ module.exports.defaultActions = defaultActions;
 module.exports.legacyPermissionToModuleAction = legacyPermissionToModuleAction;
 module.exports.legacyPermissionToModuleActions = legacyPermissionToModuleActions;
 module.exports.RBAC_MIGRATION_VERSION = RBAC_MIGRATION_VERSION;
+module.exports.invalidateMyAccessCache = invalidateMyAccessCache;
 module.exports.legacyModuleByPrefix = legacyModuleByPrefix;

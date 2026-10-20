@@ -1,34 +1,19 @@
 /**
- * Supabase admin client for server-side operations.
+ * Legacy Supabase JS client.
  *
- * Uses @supabase/server core primitives (createAdminClient) as documented
- * in the package README. This client bypasses RLS and must NEVER be
- * imported from any file that can end up in frontend bundles.
- *
- * SUPABASE_SECRET_KEY bypasses RLS — server-side only, never sent to the
- * frontend, never logged.
- *
- * For now, this client is only used for Storage operations.
- * All relational data goes through Prisma.
+ * Documents no longer use Supabase Storage (Vercel Blob in production,
+ * local `uploads/` in development). Relational data uses Prisma/Postgres.
+ * This module is kept only if an operator still needs ad-hoc Supabase admin
+ * access; nothing in the request path imports it.
  */
 
 const { createClient } = require("@supabase/supabase-js");
 const env = require("./env");
 
-// Validate required env vars at module load time
-if (!env.SUPABASE_URL) {
-  throw new Error("SUPABASE_URL is required for Supabase admin client");
+if (!env.SUPABASE_URL || !env.SUPABASE_SECRET_KEY) {
+  module.exports = null;
+} else {
+  module.exports = createClient(env.SUPABASE_URL, env.SUPABASE_SECRET_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
 }
-if (!env.SUPABASE_SECRET_KEY) {
-  throw new Error("SUPABASE_SECRET_KEY is required for Supabase admin client");
-}
-
-/**
- * Server-side Supabase admin client.
- * Bypasses RLS. Use only for Storage operations.
- */
-const supabaseAdmin = createClient(env.SUPABASE_URL, env.SUPABASE_SECRET_KEY, {
-  auth: { persistSession: false, autoRefreshToken: false },
-});
-
-module.exports = supabaseAdmin;

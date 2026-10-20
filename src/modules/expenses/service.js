@@ -3,6 +3,7 @@ const Expense = require("./expense.model");
 const { createAuditLog, AuditLog } = require("../administration/auditLog.model");
 const ApiError = require("../../utils/ApiError");
 const InvoiceService = require("../invoices/service");
+const { assertSeparationOfDuties } = require("../../utils/separationOfDuties");
 
 class ExpenseService {
   static async list({ category, status, startDate, endDate, page = 1, limit = 20 }) {
@@ -26,6 +27,7 @@ class ExpenseService {
   static async create(data, req) { const expense = await Expense.create(data, req.user._id); await createAuditLog({ req, entityType: "Expense", entityId: expense._id, action: AuditLog.ACTIONS.CREATE, changes: { after: expense } }); const fileUrl = expense.fileUrl || expense.invoiceUrl || expense.voucherUrl; if (fileUrl) await InvoiceService.safeRegisterInvoice("Expense", expense, { fileUrl, createdBy: req.user._id }); return expense; }
   static async transition(id, action, req) {
     const expense = await Expense.findById(id); if (!expense) throw new ApiError(404, "Expense not found");
+    if (action === "approve") await assertSeparationOfDuties(req, expense.createdBy, "an expense");
     const transitions = { approve: [Expense.STATUS.PENDING, { status: Expense.STATUS.APPROVED, approvedBy: req.user._id }], reject: [Expense.STATUS.PENDING, { status: Expense.STATUS.REJECTED, rejectedBy: req.user._id }], pay: [Expense.STATUS.APPROVED, { status: Expense.STATUS.PAID, paidAt: new Date().toISOString() }] };
     const transition = transitions[action]; if (!transition || expense.status !== transition[0]) throw new ApiError(409, `Expense cannot be ${action} from ${expense.status}`);
     await Expense.update(id, transition[1]); const updated = await Expense.findById(id); await createAuditLog({ req, entityType: "Expense", entityId: id, action: AuditLog.ACTIONS.STATUS_CHANGE, changes: { before: expense, after: updated } }); if (action === "pay") await InvoiceService.safeRegisterInvoice("Expense", updated, { fileUrl: updated.fileUrl || updated.invoiceUrl || updated.voucherUrl || null, createdBy: req.user._id });

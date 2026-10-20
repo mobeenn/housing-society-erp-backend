@@ -7,6 +7,8 @@ const Member = require("../members/member.model");
 const { AuditLog, createAuditLog } = require("../administration/auditLog.model");
 const ApiError = require("../../utils/ApiError");
 const NotificationService = require("../notifications/service");
+const { assertSeparationOfDuties } = require("../../utils/separationOfDuties");
+const SocietySettings = require("../administration/societySettings.model");
 
 const decorateInstallment = (installment) => {
   if (installment.status === "Paid") return { ...installment, overdueDays: 0 };
@@ -65,6 +67,18 @@ class BookingService {
     const booking = await Booking.create({ ...data, bookingDate: data.bookingDate || new Date().toISOString(), price: Number(data.price), discount: Number(data.discount), developmentCharges: Number(data.developmentCharges), additionalCharges: Number(data.additionalCharges), bookingAmount: Number(data.bookingAmount) }, req.user._id);
     await PlotService.update(data.plot, { status: Plot.STATUS.BOOKED }, req);
     await createAuditLog({ req, entityType: "Booking", entityId: booking._id, action: AuditLog.ACTIONS.CREATE, changes: { after: booking } });
+
+    const settings = await SocietySettings.get();
+    if (settings.requireBookingApproval === false) {
+      const approved = await this.approve(
+        booking._id,
+        { planTemplate: data.planTemplate || booking.planTemplate },
+        req,
+        { skipSoD: true, autoApproved: true }
+      );
+      return { booking: approved, preview, autoApproved: true };
+    }
+
     await NotificationService.safeNotifyPermission("bookings:approve", {
       title: "New booking requires approval",
       message: `Booking for ${data.plot} is waiting for approval.`,
@@ -154,10 +168,11 @@ class BookingService {
     };
   }
 
-  static async approve(id, data, req) {
+  static async approve(id, data, req, { skipSoD = false, autoApproved = false } = {}) {
     const booking = await Booking.findById(id);
     if (!booking) throw new ApiError(404, "Booking not found");
     if (booking.status !== Booking.STATUS.PENDING_APPROVAL) throw new ApiError(409, "Only pending bookings can be approved");
+    if (!skipSoD) await assertSeparationOfDuties(req, booking.createdBy, "a booking");
     const template = data.planTemplate || booking.planTemplate;
     const preview = await this.preview({ ...booking, planTemplate: template });
     await PlotService.update(booking.plot, { status: Plot.STATUS.ALLOTTED }, req);
@@ -166,11 +181,20 @@ class BookingService {
     const plan = await InstallmentPlan.create({ booking: id, totalAmount: schedule.totalAmount, numberOfInstallments: template.numberOfInstallments, frequency: template.frequency });
     const installments = await Installment.createMany(schedule.installments.map((item) => ({ plan: plan._id, member: booking.member, plot: booking.plot, dueDate: item.dueDate, amount: item.amount, penaltyAmount: 0, discountAmount: 0, paidAmount: 0, balance: item.amount, status: "Upcoming", overdueDays: 0 })));
     await InstallmentPlan.update(plan._id, { generatedInstallments: installments.map((item) => item._id) });
-    await createAuditLog({ req, entityType: "Booking", entityId: id, action: AuditLog.ACTIONS.APPROVE, changes: { before: booking, after: updated }, meta: { installmentPlanId: plan._id } });
+    await createAuditLog({
+      req,
+      entityType: "Booking",
+      entityId: id,
+      action: AuditLog.ACTIONS.APPROVE,
+      changes: { before: booking, after: updated },
+      meta: { installmentPlanId: plan._id, autoApproved: !!autoApproved },
+    });
     const enriched = await enrichBooking(await Booking.findById(id));
     await NotificationService.safeNotifyMember(booking.member, {
-      title: "Booking approved",
-      message: "Your booking has been approved and the plot has been allotted.",
+      title: autoApproved ? "Booking confirmed" : "Booking approved",
+      message: autoApproved
+        ? "Your booking was confirmed and the plot has been allotted."
+        : "Your booking has been approved and the plot has been allotted.",
       relatedEntityType: "Booking",
       relatedEntityId: id,
       eventType: "booking.approved",
@@ -201,9 +225,60 @@ class BookingService {
     const booking = await Booking.findById(id);
     if (!booking) throw new ApiError(404, "Booking not found");
     if (booking.status === Booking.STATUS.CANCELLED) throw new ApiError(409, "Booking is already cancelled");
-    const updated = await Booking.update(id, { status: Booking.STATUS.CANCELLED, cancellationReason: data.reason, refundAmount: Number(data.refundAmount), cancelledAt: new Date().toISOString() });
+
+    let voidedCount = 0;
+    let paidForRefund = 0;
+    const meta = { policy: "Plot returns to Available." };
+
+    if (booking.status === Booking.STATUS.CONFIRMED) {
+      const plan = await InstallmentPlan.findByBooking(id);
+      const installments = plan
+        ? await Installment.find({ plan: plan._id })
+        : await Installment.find({ member: booking.member, plot: booking.plot });
+
+      for (const row of installments) {
+        const paid = Number(row.paidAmount || 0);
+        const balance = Number(row.balance || 0);
+        if (paid > 0) paidForRefund += paid;
+        // Void any installment that still has an unpaid balance, or was never paid.
+        if (balance > 0 || paid <= 0) {
+          if (String(row.status) === "Voided") continue;
+          await Installment.update(row._id, {
+            status: "Voided",
+            balance: 0,
+          });
+          voidedCount += 1;
+        }
+      }
+
+      meta.policy =
+        "Confirmed booking cancelled: unpaid installments voided; paid amounts flagged for refund.";
+      meta.voidedInstallments = voidedCount;
+      meta.paidAmountFlaggedForRefund = paidForRefund;
+    }
+
+    const refundAmount =
+      data.refundAmount != null && data.refundAmount !== ""
+        ? Number(data.refundAmount)
+        : paidForRefund;
+
+    await Booking.update(id, {
+      status: Booking.STATUS.CANCELLED,
+      cancellationReason: data.reason,
+      refundAmount,
+    });
+    const updated = await Booking.findById(id);
+    meta.refundRequired = paidForRefund > 0;
+    meta.paidAmountForRefund = paidForRefund;
     await PlotService.update(booking.plot, { status: Plot.STATUS.AVAILABLE }, req);
-    await createAuditLog({ req, entityType: "Booking", entityId: id, action: AuditLog.ACTIONS.CANCEL, changes: { before: booking, after: updated }, meta: { policy: "Plot returns to Available; installment plan is retained for audit." } });
+    await createAuditLog({
+      req,
+      entityType: "Booking",
+      entityId: id,
+      action: AuditLog.ACTIONS.CANCEL,
+      changes: { before: booking, after: updated },
+      meta,
+    });
     await NotificationService.safeNotifyMember(booking.member, {
       title: "Booking cancelled",
       message: `Your booking was cancelled: ${data.reason}`,

@@ -6,8 +6,32 @@ const { Plot } = require("../properties/plot.model");
 const { Booking } = require("../bookings/booking.model");
 const { AuditLog, createAuditLog } = require("../administration/auditLog.model");
 const ApiError = require("../../utils/ApiError");
+const RbacService = require("../rbac/service");
 
 const entityModels = { member: Member, plot: Plot, booking: Booking };
+
+/** Map document relatedEntityType → RBAC module key for row-level access. */
+const ENTITY_MODULE = {
+  member: "members",
+  plot: "plots",
+  booking: "bookings",
+  transfer: "transfers",
+  transferrequest: "transfers",
+  noc: "nocs",
+  nocapplication: "nocs",
+  possession: "possession",
+  possessionapplication: "possession",
+  construction: "construction",
+  constructionapplication: "construction",
+  complaint: "complaints",
+  expense: "expenses",
+  payment: "payments",
+  employee: "hr",
+  vendor: "procurement",
+  purchaserequest: "procurement",
+  purchaseorder: "procurement",
+  grn: "procurement",
+};
 
 const normalizeDate = (value, field) => {
   if (!value) return null;
@@ -43,12 +67,34 @@ class DocumentService {
     const query = {};
     if (filters.relatedEntityType) query.relatedEntityType = filters.relatedEntityType.toLowerCase();
     if (filters.relatedEntityId) query.relatedEntityId = filters.relatedEntityId;
-    return Document.find(query, { sort: { createdAt: -1 } });
+    const { paginate } = require("../../utils/paginate");
+    const rows = await Document.find(query, { sort: { createdAt: -1 } });
+    // Entity-scoped lists stay uncapped for detail pages; global lists paginate.
+    if (filters.relatedEntityType && filters.relatedEntityId) {
+      return { data: rows, pagination: { page: 1, limit: rows.length, total: rows.length, pages: 1 } };
+    }
+    return paginate(rows, filters);
   }
 
-  static async getDownload(id) {
+  static async assertRelatedEntityAccess(user, document, action) {
+    const type = String(document.relatedEntityType || "").toLowerCase();
+    const moduleKey = ENTITY_MODULE[type];
+    if (!moduleKey) {
+      // Unknown entity types still require documents module access (route-level).
+      return;
+    }
+    if (!(await RbacService.isAllowed(user, moduleKey, action))) {
+      throw new ApiError(
+        403,
+        `You do not have permission to ${action} documents for this ${type || "record"}`,
+      );
+    }
+  }
+
+  static async getDownload(id, user) {
     const document = await Document.findById(id);
     if (!document) throw new ApiError(404, "Document not found");
+    if (user) await this.assertRelatedEntityAccess(user, document, "view");
     const fileBuffer = await storage.readFile(document.storageKey || document.fileName);
     if (!fileBuffer) throw new ApiError(404, "Document file not found");
     return { document, fileBuffer };
@@ -58,6 +104,7 @@ class DocumentService {
     if (![Document.VERIFICATION_STATUS.VERIFIED, Document.VERIFICATION_STATUS.REJECTED].includes(status)) throw new ApiError(400, "Verification status must be Verified or Rejected");
     const document = await Document.findById(id);
     if (!document) throw new ApiError(404, "Document not found");
+    await this.assertRelatedEntityAccess(req.user, document, "approve");
     await Document.update(id, { verificationStatus: status, verifiedBy: req.user._id, verifiedAt: new Date().toISOString() });
     const updated = await Document.findById(id);
     await createAuditLog({ req, entityType: "Document", entityId: id, action: AuditLog.ACTIONS.STATUS_CHANGE, changes: { before: document, after: updated } });

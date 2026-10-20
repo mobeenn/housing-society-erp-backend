@@ -12,6 +12,7 @@ const {
   calculatePayrollEntry,
 } = require("./payrollCalculator");
 const { postToGL } = require("../finance-gl/postToGL");
+const { assertSeparationOfDuties } = require("../../utils/separationOfDuties");
 
 const number = (value) => (Number.isFinite(Number(value)) ? Number(value) : 0);
 const actorId = (req) => req?.user?._id || req?.userId || null;
@@ -266,6 +267,7 @@ class PayrollService {
     if (run.status !== PayrollRun.STATUS.DRAFT) {
       throw new ApiError(409, `Only Draft payroll runs can be approved (current status: ${run.status})`);
     }
+    await assertSeparationOfDuties(req, run.generatedBy, "a payroll run");
 
     const posting = await postToGL({
       date: new Date(Date.UTC(number(run.year), number(run.month), 0)).toISOString().slice(0, 10),

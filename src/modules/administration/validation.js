@@ -20,6 +20,8 @@ const societySettingsSchema = z.object({
   currency: z.string().min(1).max(5).default("PKR"),
   recoveryAutoBlockThreshold: z.coerce.number().min(0).max(100).default(49),
   recoveryAllowSelfReserve: z.boolean().default(false),
+  enforceSeparationOfDuties: z.boolean().default(true),
+  requireBookingApproval: z.boolean().default(true),
   feeSettings: z.object({
     lateFeePercentage: z.number().min(0).max(100).default(0),
     lateFeeDaysGrace: z.number().min(0).default(0),

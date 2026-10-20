@@ -23,3 +23,5 @@ exports.exportOverdue = async (req, res) => {
     .send(Buffer.from(buffer));
 };
 exports.runAutoBlock = async (_req, res) => ApiResponse.success(res, 200, "Recovery auto-block check completed", await RecoveryService.runAutoBlockCheck({ force: true }));
+exports.runAutoBlockCron = async (_req, res) =>
+  ApiResponse.success(res, 200, "Recovery auto-block cron completed", await RecoveryService.runAutoBlockCheck({ force: true }));

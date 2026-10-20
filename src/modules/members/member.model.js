@@ -185,37 +185,12 @@ class Member {
   }
 
   /**
-   * Get member 360 view (aggregated data from all modules)
+   * @deprecated Prefer MemberService.getMember360 — kept for callers that only need the member shell.
    */
   static async get360View(id) {
     const member = await this.findById(id);
-    if (!member) {
-      return null;
-    }
-
-    // TODO: As modules are built, aggregate data from:
-    // - Properties/Plots assigned to this member
-    // - Bookings made by this member
-    // - Installments linked to this member
-    // - Payments made by this member
-    // - Transfer requests by/to this member
-    // - NOCs issued to this member
-    // - Complaints filed by this member
-    // - Documents uploaded for this member
-    // - Audit logs related to this member
-
-    return {
-      member,
-      properties: [], // Placeholder - will be populated when Plots module is built
-      bookings: [], // Placeholder - will be populated when Bookings module is built
-      installments: [], // Placeholder - will be populated when Financials module is built
-      payments: [], // Placeholder - will be populated when Payments module is built
-      transfers: [], // Placeholder - will be populated when Transfers module is built
-      nocs: [], // Placeholder - will be populated when NOCs module is built
-      complaints: [], // Placeholder - will be populated when Complaints module is built
-      documents: [], // Placeholder - will be populated when Documents module is built
-      auditLogs: [], // Placeholder - will be populated when full audit integration is ready
-    };
+    if (!member) return null;
+    return { member };
   }
 
   /**

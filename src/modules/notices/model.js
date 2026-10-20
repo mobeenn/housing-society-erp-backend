@@ -23,6 +23,7 @@ class Notice {
       expiryDate: data.expiryDate || null,
       status: data.status || "Draft",
       publishedAt: data.status === "Published" ? now : null,
+      sendEmail: Boolean(data.sendEmail),
       createdBy: data.createdBy,
       createdAt: now,
       updatedAt: now,

@@ -92,10 +92,33 @@ class NoticeService {
       eventKey: `notice-published:${notice._id}`,
       createdBy: notice.createdBy,
     });
+
+    // Opt-in email — failures must never block publish.
+    if (notice.sendEmail) {
+      try {
+        const users = await User.find({ isActive: true });
+        const byId = new Map(users.map((u) => [u._id, u]));
+        for (const userId of userIds) {
+          const user = byId.get(userId);
+          if (!user?.email) continue;
+          await NotificationService.dispatchStubChannels({
+            recipient: user.email,
+            subject: notice.title,
+            message: notice.body,
+            channels: ["email"],
+            metadata: { noticeId: notice._id, eventType: "notice.published" },
+          }).catch((err) => console.warn("[notice.email]", err.message));
+        }
+      } catch (error) {
+        console.warn("[notice.email] dispatch failed:", error.message);
+      }
+    }
+
     return Notice.findById(id);
   }
 
-  static async listForUser(user, { includeExpired = false } = {}) {
+  static async listForUser(user, { includeExpired = false, page, limit } = {}) {
+    const { paginate } = require("../../utils/paginate");
     const now = new Date();
     const all = await Notice.find({}, { sort: { publishDate: -1 } });
     const canManage = await RbacService.isAllowed(user, "notices", "edit");
@@ -115,7 +138,7 @@ class NoticeService {
       return (specificAudienceIds.get(notice._id) || []).includes(user._id);
     });
 
-    return { data: visible, pagination: { total: visible.length } };
+    return paginate(visible, { page, limit });
   }
 
   static async remove(id) {

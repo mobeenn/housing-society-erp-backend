@@ -221,8 +221,26 @@ const DEFAULT_ROLES = [
     isSystemRole: true,
   },
   {
+    name: "Store & Procurement Officer",
+    description: "Manages inventory, vendors, purchase requests, quotations, POs and goods received",
+    permissions: [
+      PERMISSIONS.INVENTORY_VIEW,
+      PERMISSIONS.INVENTORY_CREATE,
+      PERMISSIONS.INVENTORY_EDIT,
+      PERMISSIONS.PROCUREMENT_VIEW,
+      PERMISSIONS.PROCUREMENT_CREATE,
+      PERMISSIONS.PROCUREMENT_EDIT,
+      PERMISSIONS.PROCUREMENT_APPROVE,
+      PERMISSIONS.ASSETS_VIEW,
+      PERMISSIONS.REPORTS_VIEW,
+    ],
+    isSystemRole: true,
+    isActive: true,
+  },
+  // Legacy roles kept for migration history — created inactive when missing.
+  {
     name: "Store Manager",
-    description: "Manages inventory, stock and asset tracking",
+    description: "Legacy role — merged into Store & Procurement Officer",
     permissions: [
       PERMISSIONS.INVENTORY_VIEW,
       PERMISSIONS.INVENTORY_CREATE,
@@ -233,10 +251,11 @@ const DEFAULT_ROLES = [
       PERMISSIONS.REPORTS_VIEW,
     ],
     isSystemRole: true,
+    isActive: false,
   },
   {
     name: "Procurement Officer",
-    description: "Creates purchase orders and manages vendor procurement",
+    description: "Legacy role — merged into Store & Procurement Officer",
     permissions: [
       PERMISSIONS.PROCUREMENT_VIEW,
       PERMISSIONS.PROCUREMENT_CREATE,
@@ -245,6 +264,7 @@ const DEFAULT_ROLES = [
       PERMISSIONS.REPORTS_VIEW,
     ],
     isSystemRole: true,
+    isActive: false,
   },
   {
     name: "Receptionist",
@@ -295,8 +315,12 @@ async function seed() {
           PERMISSIONS.DASHBOARDS_VIEW,
           PERMISSIONS.REPORTS_VIEW,
         ])];
-        await Role.create({ ...roleData, permissions });
-        console.log(`   ✅ Created role: ${roleData.name}`);
+        await Role.create({
+          ...roleData,
+          permissions,
+          isActive: roleData.isActive !== false,
+        });
+        console.log(`   ✅ Created role: ${roleData.name}${roleData.isActive === false ? " (inactive)" : ""}`);
       }
     }
 

@@ -1,9 +1,12 @@
 const UserService = require("./service");
 const ApiResponse = require("../../utils/apiResponse");
+const RbacService = require("../rbac/service");
 
 class UserController {
   static async getAll(req, res) {
-    const result = await UserService.getAll(req.query);
+    const result = await UserService.getAll(req.query, {
+      hideSuperAdmin: !RbacService.isSuperAdmin(req.user),
+    });
     ApiResponse.success(res, 200, result);
   }
 

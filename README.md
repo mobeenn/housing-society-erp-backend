@@ -10,7 +10,7 @@ Node.js + Express REST API for Civica.
 - **Auth** — JWT (access + httpOnly refresh), bcryptjs
 - **Validation** — Zod
 - **Security** — helmet, cors, express-rate-limit
-- **Documents** — multer; local disk and/or Vercel Blob / Supabase Storage
+- **Documents** — multer; local `uploads/` in development, Vercel Blob in production
 - **PDFs / Excel** — pdfkit, exceljs, qrcode
 
 Runtime persistence is confirmed by `GET /api/health` → `persistence: "postgresql-prisma"`.  
@@ -117,6 +117,16 @@ backend/
 - Super Admin bypasses checks; others use `RoleModuleAccess`
 
 Module mounts live in [`src/app.js`](src/app.js) (`/api/auth`, `/api/members`, `/api/plots`, `/api/payments`, `/api/recovery`, lifecycle routes, HR, security, procurement, …).
+
+## Database backups
+
+Prefer Supabase Dashboard → Database → Backups, or `pg_dump` using `DIRECT_URL` (not the pooler). See the root [README](../README.md#database-backups) and [DEPLOYMENT_CHECKLIST](../docs/DEPLOYMENT_CHECKLIST.md).
+
+Read-only orphan check before adding FKs:
+
+```bash
+npm run db:orphan-check
+```
 
 ## Background jobs
 

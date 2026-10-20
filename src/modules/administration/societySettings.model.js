@@ -21,6 +21,8 @@ class SocietySettings {
         ? Number(settings.recoveryAutoBlockThreshold)
         : defaults.recoveryAutoBlockThreshold,
       recoveryAllowSelfReserve: settings.recoveryAllowSelfReserve === true,
+      enforceSeparationOfDuties: settings.enforceSeparationOfDuties !== false,
+      requireBookingApproval: settings.requireBookingApproval !== false,
     };
   }
 
@@ -42,6 +44,8 @@ class SocietySettings {
           feeSettings: data.feeSettings || {},
           recoveryAutoBlockThreshold: data.recoveryAutoBlockThreshold ?? existing.recoveryAutoBlockThreshold ?? 49,
           recoveryAllowSelfReserve: data.recoveryAllowSelfReserve ?? existing.recoveryAllowSelfReserve ?? false,
+          enforceSeparationOfDuties: data.enforceSeparationOfDuties ?? existing.enforceSeparationOfDuties ?? true,
+          requireBookingApproval: data.requireBookingApproval ?? existing.requireBookingApproval ?? true,
           contactInfo: data.contactInfo || {},
           updatedAt: new Date().toISOString(),
         }
@@ -56,6 +60,8 @@ class SocietySettings {
         feeSettings: data.feeSettings || {},
         recoveryAutoBlockThreshold: data.recoveryAutoBlockThreshold ?? 49,
         recoveryAllowSelfReserve: data.recoveryAllowSelfReserve ?? false,
+        enforceSeparationOfDuties: data.enforceSeparationOfDuties !== false,
+        requireBookingApproval: data.requireBookingApproval !== false,
         contactInfo: data.contactInfo || {},
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -89,6 +95,8 @@ class SocietySettings {
       },
       recoveryAutoBlockThreshold: 49,
       recoveryAllowSelfReserve: false,
+      enforceSeparationOfDuties: true,
+      requireBookingApproval: true,
       contactInfo: {
         phone: "",
         email: "",

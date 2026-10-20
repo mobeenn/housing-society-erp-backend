@@ -3,12 +3,14 @@ const ApiError = require("../../utils/ApiError");
 const RbacService = require("../rbac/service");
 
 class RoleService {
-  async getAll() {
+  async getAll({ includeInactive = false } = {}) {
     const roles = await prisma.role.findMany({
+      where: includeInactive ? undefined : { isActive: true },
       orderBy: { createdAt: "desc" },
     });
     return roles.map((r) => ({
       ...r,
+      _id: r.id,
       isSystem: !!(r.isSystem || r.isSystemRole),
     }));
   }
@@ -22,6 +24,7 @@ class RoleService {
     }
     return {
       ...role,
+      _id: role.id,
       isSystem: !!(role.isSystem || role.isSystemRole),
     };
   }

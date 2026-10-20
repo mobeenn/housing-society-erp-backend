@@ -1,10 +1,18 @@
 const RoleService = require("./service");
 const ApiResponse = require("../../utils/apiResponse");
 const { createAuditLog } = require("../administration/auditLog.model");
+const RbacService = require("../rbac/service");
 
 class RoleController {
   async getAll(req, res) {
-    const roles = await RoleService.getAll();
+    const isSuperAdmin = RbacService.isSuperAdmin(req.user);
+    const includeInactive =
+      isSuperAdmin && String(req.query.includeInactive || "").toLowerCase() === "true";
+    let roles = await RoleService.getAll({ includeInactive });
+    // Hide Super Admin role from non–Super-Admin callers (P2-3).
+    if (!isSuperAdmin) {
+      roles = roles.filter((r) => r.name !== "Super Admin");
+    }
     ApiResponse.success(res, 200, roles);
   }
 

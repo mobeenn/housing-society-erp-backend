@@ -84,6 +84,48 @@ const getAuditLogs = async (req, res) => {
   ApiResponse.success(res, 200, "Audit logs retrieved", result);
 };
 
+const getSetupStatus = async (_req, res) => {
+  const data = await AdministrationService.getSetupStatus();
+  ApiResponse.success(res, 200, "Setup status", data);
+};
+
+const CsvImportService = require("./csvImport.service");
+
+const csvTextFromRequest = (req) => {
+  if (req.file?.buffer) return req.file.buffer.toString("utf8");
+  if (typeof req.body?.csv === "string") return req.body.csv;
+  if (typeof req.body === "string") return req.body;
+  return "";
+};
+
+const memberImportTemplate = async (_req, res) => {
+  res.type("text/csv").attachment("members-template.csv").send(CsvImportService.memberTemplate());
+};
+
+const plotImportTemplate = async (_req, res) => {
+  res.type("text/csv").attachment("plots-template.csv").send(CsvImportService.plotTemplate());
+};
+
+const previewMemberImport = async (req, res) => {
+  const data = await CsvImportService.previewMembers(csvTextFromRequest(req));
+  ApiResponse.success(res, 200, "Member import preview", data);
+};
+
+const previewPlotImport = async (req, res) => {
+  const data = await CsvImportService.previewPlots(csvTextFromRequest(req));
+  ApiResponse.success(res, 200, "Plot import preview", data);
+};
+
+const commitMemberImport = async (req, res) => {
+  const data = await CsvImportService.commitMembers(req.body || {}, req);
+  ApiResponse.success(res, 200, "Members imported", data);
+};
+
+const commitPlotImport = async (req, res) => {
+  const data = await CsvImportService.commitPlots(req.body || {}, req);
+  ApiResponse.success(res, 200, "Plots imported", data);
+};
+
 module.exports = {
   getSocietySettings,
   updateSocietySettings,
@@ -95,4 +137,11 @@ module.exports = {
   archiveMasterData,
   restoreMasterData,
   getAuditLogs,
+  getSetupStatus,
+  memberImportTemplate,
+  plotImportTemplate,
+  previewMemberImport,
+  previewPlotImport,
+  commitMemberImport,
+  commitPlotImport,
 };

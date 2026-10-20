@@ -8,5 +8,6 @@ router.use(authenticate);
 router.get("/my-access", controller.myAccess);
 router.get("/roles/:roleId/access", requireSuperAdmin, controller.getRoleAccess);
 router.put("/roles/:roleId/access", requireSuperAdmin, controller.updateRoleAccess);
+router.post("/roles/:roleId/reset-default", requireSuperAdmin, controller.resetRoleAccess);
 
 module.exports = router;
